@@ -1,0 +1,19 @@
+{
+  "success": true,
+  "start_roll_deg": 0.0,
+  "target_roll_deg": 720.0,
+  "final_roll_deg": 720.0,
+  "forward_distance_m": 2.4,
+  "body_center_height_m": 0.35,
+  "same_algorithm_all_angles": true,
+  "hard_coded_switch_angles": false,
+  "saved_future_contact_states_used": false,
+  "contact_sequence_prescribed": false,
+  "dfs_nodes": 29,
+  "contact_events": 28,
+  "final_support": [0, 4, 7],
+  "touchdown_candidate_requirement": "ground-safe continuous joint-space segment from the current swing configuration",
+  "swing_clearance_requirement": "new swing configuration must be connected to current configuration by a ground-safe direct segment",
+  "self_collision_used_as_search_rejection": false,
+  "validation_scope": "hybrid contact/search state feasibility at the numerical path samples; dense continuous trajectory certification remains a separate validation step"
+}

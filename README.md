@@ -4,9 +4,9 @@ Research prototype for **hybrid geometric/kinematic contact planning** of the 8-
 
 The current milestone is a **single unified contact-search algorithm** applied from 0° to 720° of forward + roll motion. The planner is not given switch angles or a gait/contact sequence. Starting from only the initial joint state and initial support set, it repeatedly advances the current support mode, detects loss of feasibility, generates continuously reachable touchdown candidates, searches local binary contact changes, and backtracks when a branch later dead-ends.
 
-## Current task
+## Current benchmark task
 
-The proof-of-concept task fixes the body geometric-center height at 0.35 m and imposes
+The body geometric-center height is fixed at 0.35 m and the benchmark path is
 
 - roll: 0° → 720°
 - forward displacement: `x = roll_deg / 300`, so 720° corresponds to 2.4 m
@@ -30,9 +30,21 @@ At every path sample the same rule is used:
 
 There are **no angle-specific branches**, saved future states, or pre-programmed switch angles in the unified planner.
 
-## Verified search result
+## Reference result
 
-The checked-in reference report `results/unified_rollwalk_720_search_report.json` was produced by the same policy across the entire 0°–720° horizon and reached 720° with 29 DFS nodes and 28 contact events.
+The checked-in baseline reached 720° with:
+
+- 29 DFS nodes
+- 28 contact events
+- final support set `[0, 4, 7]`
+
+See:
+
+- `results/unified_rollwalk_720_search_summary.json` — validation scope and headline result
+- `results/unified_rollwalk_720_contact_events.json` — contact-event sequence produced by the search
+- `results/unified_rollwalk_720_terminal.npz` — terminal joint/support/anchor state
+
+The event sequence is **output**, not an input gait schedule.
 
 Important limitation: this milestone certifies the **hybrid contact/search sequence and per-state Level-1 feasibility used inside the planner**. Dense continuous-trajectory certification between every numerical sample is a separate validation step. Self-collision is currently measured by the Level-1 checker but is intentionally not used to reject contact-search candidates while stepping logic is being developed.
 
@@ -41,10 +53,14 @@ Important limitation: this milestone certifies the **hybrid contact/search seque
 - `src/lily_contact_planner/kinematics.py` — Lily forward kinematics and Jacobians
 - `src/lily_contact_planner/checker.py` — independent Level-1 geometric checker
 - `src/lily_contact_planner/tasks.py` — task-path definitions
-- `src/lily_contact_planner/unified_planner.py` — unified discrete-contact / nonlinear-IK search
+- `src/lily_contact_planner/planner_base.py` — continuous kinematic feasibility layer
+- `src/lily_contact_planner/planner_touchdown.py` — touchdown generation and local contact ranking
+- `src/lily_contact_planner/planner_search.py` — DFS/backtracking contact-event search
+- `src/lily_contact_planner/unified_planner.py` — public unified planner class
 - `scripts/run_rollwalk_720.py` — 0°→720° reproducibility entry point
 - `docs/formulation.md` — mathematical Level-1 formulation
-- `results/` — reference search report and terminal state
+- `docs/validated_baseline.md` — baseline and validation boundary
+- `results/` — reference search result
 
 ## Run
 
@@ -59,4 +75,4 @@ The full 720° search is intentionally computation-heavy; it is a research proof
 
 ## Status
 
-This repository freezes the **first angle-independent contact-planning baseline**. The next stages are to make the continuous rollout/certification explicit, restore finite-thickness self-collision constraints, replace task-specific path progression with general joystick/task commands, and then investigate stronger continuous optimization inside each contact branch.
+This repository freezes the **first angle-independent contact-planning baseline**. Next stages are dense continuous rollout/certification, finite-thickness self-collision, general joystick/task commands, and stronger continuous optimization inside each discrete contact branch.

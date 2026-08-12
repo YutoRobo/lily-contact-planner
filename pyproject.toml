@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lily-contact-planner"
+version = "0.1.0"
+description = "Level-1 hybrid contact planner for the 8-legged robot Lily"
+requires-python = ">=3.9"
+dependencies = [
+  "numpy>=1.23",
+  "scipy>=1.9",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
