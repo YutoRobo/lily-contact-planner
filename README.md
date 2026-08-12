@@ -30,6 +30,38 @@ At every path sample the same rule is used:
 
 There are **no angle-specific branches**, saved future states, or pre-programmed switch angles in the unified planner.
 
+## What solver is actually used?
+
+The current 0°–720° baseline is **not one global NLP**, and it is **not a QP**. It uses two layers:
+
+- **Discrete contact decisions:** depth-first search (DFS) with backtracking.
+- **Continuous joint configurations:** bounded nonlinear least-squares inverse kinematics using `scipy.optimize.least_squares`.
+
+In short:
+
+```text
+DFS / backtracking for contact decisions
++
+nonlinear least-squares IK for continuous joint states
+```
+
+The main code locations are:
+
+- `src/lily_contact_planner/planner_search.py`
+  - `plan()` — planning entry point
+  - `_dfs()` — DFS/backtracking over contact events
+  - `_advance_to_stall()` — advance the current support mode until it can no longer progress
+- `src/lily_contact_planner/planner_touchdown.py`
+  - `_reachable_touchdowns()` — generate/refine reachable touchdown candidates
+  - `_rank_plans()` — score local contact add/remove candidates using finite look-ahead
+- `src/lily_contact_planner/planner_base.py`
+  - `_solve_leg_to_anchor()` — bounded nonlinear least-squares support-foot IK
+  - `_support_only()` — support-mode kinematic feasibility
+  - `_actual()` — per-state Level-1 feasibility check
+  - `_predict_gain()` — look-ahead progress estimate
+
+A fuller explanation, including the current search score and the distinction from the earlier contact-implicit CasADi/IPOPT experiments, is in [`docs/algorithm_solver.md`](docs/algorithm_solver.md).
+
 ## Reference result
 
 The checked-in baseline reached 720° with:
@@ -59,6 +91,7 @@ Important limitation: this milestone certifies the **hybrid contact/search seque
 - `src/lily_contact_planner/unified_planner.py` — public unified planner class
 - `scripts/run_rollwalk_720.py` — 0°→720° reproducibility entry point
 - `docs/formulation.md` — mathematical Level-1 formulation
+- `docs/algorithm_solver.md` — solver architecture and code map
 - `docs/validated_baseline.md` — baseline and validation boundary
 - `results/` — reference search result
 
