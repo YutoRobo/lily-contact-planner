@@ -1,81 +1,105 @@
 # Lily Contact Planner
 
-Research prototype for **hybrid geometric/kinematic contact planning** of the 8-legged robot Lily.
+8脚ロボット Lily を対象とした、**ハイブリッド幾何・運動学ベースの接触計画**の研究用プロトタイプです。
 
-The current milestone is a **single unified contact-search algorithm** applied from 0° to 720° of forward + roll motion. The planner is not given switch angles or a gait/contact sequence. Starting from only the initial joint state and initial support set, it repeatedly advances the current support mode, detects loss of feasibility, generates continuously reachable touchdown candidates, searches local binary contact changes, and backtracks when a branch later dead-ends.
+現在の基準マイルストーンは、前進しながら 0°→720° 回転する課題に対して、**単一の接触探索アルゴリズム**を適用した結果です。planner には接触切替角度や歩容・接触系列を事前に与えません。初期関節状態と初期支持脚集合だけから開始し、現在の支持状態で進めるところまで進み、実行不能になったら touchdown 候補を生成し、局所的な接触 add/remove を探索し、先で行き止まりになれば backtracking します。
 
-## Current benchmark task
+## 現在の基準タスク
 
-The body geometric-center height is fixed at 0.35 m and the benchmark path is
+胴体幾何中心の高さを 0.35 m に固定し、基準タスクでは
 
 - roll: 0° → 720°
-- forward displacement: `x = roll_deg / 300`, so 720° corresponds to 2.4 m
+- 前進量: `x = roll_deg / 300`（720°で 2.4 m）
 - `y = 0`
 - pitch = yaw = 0
 
-This body path is a **task definition**, not a hard-coded gait. Contact switching remains autonomous.
+としています。
 
-## Defining arbitrary translation and rotation
+この胴体軌道は**タスク定義**であり、接触歩容をハードコードしているわけではありません。接触切替は planner が自動で決定します。
 
-The contact planner only needs a task path that returns the desired body pose
+## 任意の並進・回転の設定方法
+
+contact planner が必要とするのは、経路パラメータ `s` に対して目標胴体姿勢
 
 ```text
 (t(s), R(s))
 ```
 
-for a path parameter `s`. Here `t(s) = [x, y, z]` is the body geometric-center position in the **world frame**, and `R(s)` is the body orientation in `SO(3)`.
+を返すタスク定義だけです。
 
-### Arbitrary translation
+ここで
 
-Translation is specified directly in world coordinates. For example, a straight-line motion from `p0` with world-frame direction `d` is
+- `t(s) = [x, y, z]`：**ワールド座標系**での胴体幾何中心位置
+- `R(s)`：胴体姿勢を表す回転行列 `SO(3)`
+
+です。
+
+### 任意方向への並進
+
+並進はワールド座標系で直接指定します。
+
+初期位置 `p0` から、ワールド座標系の任意方向 `d` へ直線移動させる場合は、例えば
 
 ```python
 p = p0 + distance(s) * d / np.linalg.norm(d)
 ```
 
-where `d` can point in any 3-D direction. A general curved path may simply define `x(s)`, `y(s)`, and `z(s)` independently.
+とします。
 
-Examples:
+`d` は3次元の任意方向で構いません。曲線軌道にしたい場合は、`x(s)`, `y(s)`, `z(s)` を個別に定義します。
+
+例:
 
 ```python
-# +x translation
+# +x 方向へ並進
 p = np.array([distance, 0.0, 0.35])
 
-# +y translation
+# +y 方向へ並進
 p = np.array([0.0, distance, 0.35])
 
-# diagonal xy translation
-p = np.array([distance / np.sqrt(2), distance / np.sqrt(2), 0.35])
+# xy 平面45°方向へ並進
+p = np.array([
+    distance / np.sqrt(2.0),
+    distance / np.sqrt(2.0),
+    0.35,
+])
 ```
 
-### Arbitrary rotation about a world-frame axis
+### ワールド座標系の任意軸まわりの回転
 
-Rotation is defined by a **world-frame rotation axis**
+回転は、ワールド座標系で定義した単位回転軸
 
 ```text
 nW = [nx, ny, nz],  ||nW|| = 1
 ```
 
-and an angle `theta`. The orientation update is
+と回転量 `theta` で指定します。
+
+姿勢更新は
 
 ```text
 R(theta) = Exp([nW]x theta) R0
 ```
 
-where `[nW]x` is the skew-symmetric matrix of `nW`. The important convention is that the incremental rotation is multiplied on the **left**, so the commanded axis remains fixed in the world frame.
+です。
 
-With SciPy this can be written as
+`[nW]x` は `nW` の歪対称行列です。
+
+重要なのは、**増分回転を左から掛けること**です。これにより、回転軸は機体姿勢に追従せず、常にワールド座標系に固定されます。
+
+SciPy では次のように書けます。
 
 ```python
 from scipy.spatial.transform import Rotation
 
 nW = np.asarray(nW, dtype=float)
 nW = nW / np.linalg.norm(nW)
+
 R_inc = Rotation.from_rotvec(theta_rad * nW).as_matrix()
 R = R_inc @ R0
 ```
 
-The usual yaw/pitch/roll commands are only special cases:
+yaw / pitch / roll は、この任意軸回転の特殊例です。
 
 ```text
 +yaw   : nW = [ 0,  0,  1]
@@ -83,163 +107,221 @@ The usual yaw/pitch/roll commands are only special cases:
 -roll  : nW = [-1,  0,  0]
 ```
 
-For example, rotation about a 45° diagonal axis in the world `xy` plane uses
+例えば、ワールド `xy` 平面内の45°方向を回転軸にしたい場合は
 
 ```python
 nW = np.array([1.0, 1.0, 0.0]) / np.sqrt(2.0)
 ```
 
-### Simultaneous arbitrary translation + rotation
+とします。
 
-Translation and rotation are independent parts of the task pose. A task may therefore combine any world-frame translation path with any world-frame rotation axis:
+### 任意の並進と任意軸回転を同時に行う
+
+並進と回転は、目標胴体姿勢の独立した要素として設定できます。
+
+そのため、任意の並進方向と、任意の回転軸を同時に指定できます。
 
 ```python
 def pose(s):
-    # arbitrary world-frame translation
+    # ワールド座標系での任意並進
     p = p0 + distance(s) * direction_world
 
-    # arbitrary world-frame rotation
+    # ワールド座標系での任意軸回転
     theta = angle(s)
     R_inc = Rotation.from_rotvec(theta * axis_world).as_matrix()
     R = R_inc @ R0
+
     return p, R
 ```
 
-`direction_world` and `axis_world` do not need to be parallel. This allows, for example, diagonal translation while rotating about an unrelated 3-D axis.
+`direction_world` と `axis_world` は平行である必要はありません。
 
-### Piecewise motion commands
+例えば、斜め方向へ並進しながら、それとは無関係な3次元方向を軸として回転させることも可能です。
 
-Longer maneuvers can be constructed by chaining pose segments. If segment `j` starts from orientation `R_start`, define
+### 複数区間の動作を連結する
+
+長い動作は、複数の pose 区間をつなげて定義できます。
+
+区間 `j` の開始姿勢を `R_start` とすると、ワールド座標系の回転軸 `nW_j` に対して
 
 ```text
 R_j(theta) = Exp([nW_j]x theta) R_start
 ```
 
-and use the terminal pose of that segment as the initial pose of the next segment. This is how the current experimental task represents
+とし、その区間の終端姿勢を次区間の初期姿勢として使用します。
+
+現在の実験タスクでは、例えば
 
 ```text
-in-place +yaw 45°
--> +x translation with +pitch 480°
--> +y translation with -roll 480°
+その場 +yaw 45°
+-> +x 並進しながら +pitch 480°
+-> +y 並進しながら -roll 480°
 ```
 
-while keeping every commanded rotation axis defined in the world frame.
+を連結しており、各回転軸はすべてワールド座標系で定義しています。
 
-For future joystick-style commands, the same convention can be expressed using desired world-frame translational and angular velocities
+### 将来の joystick 指令
+
+将来的には、上位層から
 
 ```text
 v_des^W, omega_des^W
 ```
 
-with a small-step orientation update
+を与える構成を想定できます。
+
+ここで
+
+- `v_des^W`：ワールド座標系での目標並進速度
+- `omega_des^W`：ワールド座標系での目標角速度
+
+です。
+
+微小ステップでは
 
 ```text
-R_{k+1} = Exp([omega_des^W]x Delta s) R_k.
+R_{k+1} = Exp([omega_des^W]x Delta s) R_k
 ```
 
-The current planner still receives a prescribed body task path; it does **not yet optimize the body translation/orientation path itself**. It autonomously searches the contact sequence and leg configurations needed to follow the supplied task.
+と更新できます。
 
-## Unified algorithm
+なお、**現在の planner は胴体の並進・姿勢軌道そのものを最適化しているわけではありません**。上位から与えられた胴体目標軌道に対して、それを実現するための接触系列と脚関節状態を自動探索します。
 
-At every path sample the same rule is used:
+## 統一接触探索アルゴリズム
 
-1. Hold current support feet fixed in world coordinates and solve nonlinear leg IK for the next task sample.
-2. Keep non-support links above the floor using configurations continuously reachable from their current joint state.
-3. If the current support set cannot advance, sample touchdown candidates for swing legs.
-4. Reject touchdown candidates that are not connected to the current swing configuration by a ground-safe continuous joint-space segment.
-5. Form local discrete contact changes by adding/removing a small number of legs; no exhaustive enumeration of all `2^8` support modes is used.
-6. Evaluate each candidate with support IK and finite look-ahead progress.
-7. Search the contact-event tree with DFS/backtracking.
-8. Continue until the requested horizon or search limits are reached.
+各経路サンプルで同じルールを適用します。
 
-There are **no angle-specific branches**, saved future states, or pre-programmed switch angles in the unified planner.
+1. 現在の支持脚足先をワールド座標系で固定し、次のタスク姿勢に対して支持脚 IK を解く。
+2. 非支持脚について、現在姿勢から連続的に到達可能な範囲で床上クリアランスを確保する。
+3. 現在の支持集合でこれ以上進めなくなったら、遊脚の touchdown 候補を生成する。
+4. 現在の遊脚姿勢から ground-safe な連続関節軌道で到達できない touchdown 候補を除外する。
+5. 少数脚の add/remove を組み合わせて局所的な接触変更候補を生成する。毎回 `2^8` 個の全支持状態を総当たりする方式ではない。
+6. 各候補について支持脚 IK と有限 look-ahead を用いて、どれだけ先へ進めるかを評価する。
+7. 接触イベント木を DFS/backtracking で探索する。
+8. 目標終端まで到達するか、探索上限に達するまで繰り返す。
 
-## What solver is actually used?
+角度ごとの専用分岐、保存済み未来状態、事前指定した接触切替角度は使用しません。
 
-The checked-in 0°–720° baseline is **not one global NLP**, and it is **not a QP**. It uses two layers:
+## 現在使っている solver
 
-- **Discrete contact decisions:** depth-first search (DFS) with backtracking.
-- **Continuous joint configurations:** bounded nonlinear least-squares inverse kinematics using `scipy.optimize.least_squares`.
+チェックイン済みの 0°→720° 基準版は、全区間を一括で解く巨大な NLP でも QP でもありません。
 
-In short:
+2層構成です。
+
+- **離散接触決定**：DFS + backtracking
+- **連続関節状態**：`scipy.optimize.least_squares` を使った bounded nonlinear least-squares IK
+
+要約すると
 
 ```text
-DFS / backtracking for contact decisions
+接触系列: DFS / backtracking
 +
-nonlinear least-squares IK for continuous joint states
+連続関節状態: nonlinear least-squares IK
 ```
 
-The main code locations are:
+です。
+
+主なコード位置は次の通りです。
 
 - `src/lily_contact_planner/planner_search.py`
-  - `plan()` — planning entry point
-  - `_dfs()` — DFS/backtracking over contact events
-  - `_advance_to_stall()` — advance the current support mode until it can no longer progress
+  - `plan()` — planner の入口
+  - `_dfs()` — 接触イベントの DFS/backtracking
+  - `_advance_to_stall()` — 現在の支持状態で進めるところまで前進
 - `src/lily_contact_planner/planner_touchdown.py`
-  - `_reachable_touchdowns()` — generate/refine reachable touchdown candidates
-  - `_rank_plans()` — score local contact add/remove candidates using finite look-ahead
+  - `_reachable_touchdowns()` — touchdown 候補の生成・絞り込み
+  - `_rank_plans()` — 局所 add/remove 候補の順位付け
 - `src/lily_contact_planner/planner_base.py`
-  - `_solve_leg_to_anchor()` — bounded nonlinear least-squares support-foot IK
-  - `_support_only()` — support-mode kinematic feasibility
-  - `_actual()` — per-state Level-1 feasibility check
-  - `_predict_gain()` — look-ahead progress estimate
+  - `_solve_leg_to_anchor()` — 支持脚足先固定 IK
+  - `_support_only()` — 支持状態の運動学的成立性確認
+  - `_actual()` — 各数値状態の Level-1 成立性確認
+  - `_predict_gain()` — look-ahead 進捗量の推定
 
-A fuller explanation, including the current search score and the distinction from the earlier contact-implicit CasADi/IPOPT experiments, is in [`docs/algorithm_solver.md`](docs/algorithm_solver.md).
+詳細は [`docs/algorithm_solver.md`](docs/algorithm_solver.md) にまとめています。
 
-## Reference result
+## 基準結果
 
-The checked-in baseline reached 720° with:
+チェックイン済みの基準版では 720° に到達しています。
 
-- 29 DFS nodes
-- 28 contact events
-- final support set `[0, 4, 7]`
+- DFS nodes: 29
+- contact events: 28
+- 最終支持脚集合: `[0, 4, 7]`
 
-See:
+参照ファイル:
 
-- `results/unified_rollwalk_720_search_summary.json` — validation scope and headline result
-- `results/unified_rollwalk_720_contact_events.json` — contact-event sequence produced by the search
-- `results/unified_rollwalk_720_terminal.npz` — terminal joint/support/anchor state
+- `results/unified_rollwalk_720_search_summary.json` — 基準結果の要約
+- `results/unified_rollwalk_720_contact_events.json` — 探索で得られた接触イベント系列
+- `results/unified_rollwalk_720_terminal.npz` — 終端 joint/support/anchor 状態
 
-The event sequence is **output**, not an input gait schedule.
+接触イベント系列は**入力ではなく探索結果**です。
 
-Important limitation: this milestone certifies the **hybrid contact/search sequence and per-state Level-1 feasibility used inside the planner**. Dense continuous-trajectory certification between every numerical sample is a separate validation step. Self-collision is currently measured by the Level-1 checker but is intentionally not used to reject contact-search candidates while stepping logic is being developed.
+重要な制限として、この基準マイルストーンが確認しているのは、**接触探索系列と数値サンプル点での Level-1 成立性**です。全サンプル間の連続時間軌道を厳密に保証する dense continuous certification は別途必要です。また、self-collision は Level-1 checker で計測していますが、現在の stepping logic 検討段階では接触探索候補の reject 条件には使用していません。
 
-## Experimental progress — 2026-08-13
+## 現在の実験進捗 — 2026-08-13
 
-The original 720° result above remains the historical baseline. Current experiments keep the same DFS/backtracking contact-search architecture but have introduced several implementation changes: analytic 3-DOF leg IK for fast experimental solves, a requirement that a contact switch enable at least one real next task increment, expanded touchdown fallback after normal branches fail, and lighter search parameters.
+0°→720° の結果は、歴史的な baseline として保持しています。
 
-The current multi-axis task defines rotations in the **world frame**:
+その後の実験では、DFS/backtracking を中心とした接触探索構造は維持しつつ、以下の変更を加えています。
 
-- 0°–45°: in-place `+yaw` about world `+z`;
-- 45°–525°: `+x` translation with `+pitch` about world `+y`;
-- 525°–1005°: `+y` translation with `-roll` about world `+x`.
+- 高速実験用の3DOF脚解析 IK
+- 接触切替後に、少なくとも次の1 task step へ実際に進めることを要求
+- normal branch が失敗した場合の expanded touchdown fallback
+- 実験用の軽量 search parameter
 
-A reusable `YawPitchRollWorldTask` is now in `src/lily_contact_planner/tasks.py`. A fresh partial search reached total progress 255° = 45° yaw + 210° pitch, with 7 DFS nodes, 6 contact events, zero stored-state joint-limit violations, and support-region validity at all 256 stored 1° states. The roll phase has not yet been reached in this world-frame experiment.
+現在の多軸タスクでは、回転軸をすべて**ワールド座標系**で定義しています。
 
-For visualization, contact switches are displayed in the order `old support retained -> touchdown -> old+new dual support -> support transfer -> liftoff`. The reusable implementation is now checked in as `src/lily_contact_planner/visualization.py`, with the ordering documented in [`docs/visualization.md`](docs/visualization.md) and protected by `tests/test_visualization.py`. These inserted transition frames remain a **display-only reconstruction**, not yet an explicitly optimized finite-duration contact-transfer phase.
+- 0°–45°: world `+z` 軸まわりに、その場 `+yaw`
+- 45°–525°: `+x` 並進しながら world `+y` 軸まわりに `+pitch`
+- 525°–1005°: `+y` 並進しながら world `+x` 軸まわりに `-roll`
 
-See [`docs/progress_20260813.md`](docs/progress_20260813.md) and `results/yaw45_pitch480_world_partial_255_summary.json` for the exact scope and limitations.
+再利用可能な `YawPitchRollWorldTask` を `src/lily_contact_planner/tasks.py` に追加しています。
 
-## Structure
+fresh search の部分解として、total progress 255° = yaw 45° + pitch 210° まで到達しています。
 
-- `src/lily_contact_planner/kinematics.py` — Lily forward kinematics and Jacobians
-- `src/lily_contact_planner/checker.py` — independent Level-1 geometric checker
-- `src/lily_contact_planner/tasks.py` — task-path definitions
-- `src/lily_contact_planner/planner_base.py` — continuous kinematic feasibility layer
-- `src/lily_contact_planner/planner_touchdown.py` — touchdown generation and local contact ranking
-- `src/lily_contact_planner/planner_search.py` — DFS/backtracking contact-event search
-- `src/lily_contact_planner/visualization.py` — display interpolation and touchdown-before-liftoff support-switch ordering
-- `src/lily_contact_planner/unified_planner.py` — public unified planner class
-- `scripts/run_rollwalk_720.py` — 0°→720° reproducibility entry point
-- `docs/formulation.md` — mathematical Level-1 formulation
-- `docs/algorithm_solver.md` — solver architecture and code map
-- `docs/validated_baseline.md` — baseline and validation boundary
-- `docs/progress_20260813.md` — current experimental changes and world-frame task
-- `docs/visualization.md` — visualization-only interpolation convention and limitations
-- `tests/test_visualization.py` — verifies new-foot touchdown/dual support occurs before old-foot liftoff
-- `results/` — reference and experimental search summaries
+- DFS nodes: 7
+- contact events: 6
+- 保存された 1° 刻み 256 状態で joint-limit violation: 0
+- 保存状態すべてで support-region condition: OK
 
-## Run
+この world-frame 実験では、まだ roll 区間には到達していません。
+
+可視化では、接触切替を
+
+```text
+旧支持維持
+-> 新脚 touchdown
+-> 新旧両支持
+-> support transfer
+-> 旧脚 liftoff
+```
+
+の順で表示します。
+
+再利用可能な実装は `src/lily_contact_planner/visualization.py` にあり、仕様は [`docs/visualization.md`](docs/visualization.md)、順序のテストは `tests/test_visualization.py` にあります。
+
+ただし、この中間 transition frame は現時点では**表示用再構成**です。有限時間の接触遷移軌道として planner が明示的に最適化した結果ではありません。
+
+詳細は [`docs/progress_20260813.md`](docs/progress_20260813.md) と `results/yaw45_pitch480_world_partial_255_summary.json` を参照してください。
+
+## ディレクトリ構成
+
+- `src/lily_contact_planner/kinematics.py` — Lily の順運動学・Jacobian
+- `src/lily_contact_planner/checker.py` — 独立 Level-1 幾何 checker
+- `src/lily_contact_planner/tasks.py` — task path 定義
+- `src/lily_contact_planner/planner_base.py` — 連続運動学成立性レイヤ
+- `src/lily_contact_planner/planner_touchdown.py` — touchdown 生成・局所接触候補評価
+- `src/lily_contact_planner/planner_search.py` — DFS/backtracking 接触探索
+- `src/lily_contact_planner/visualization.py` — 表示補間と touchdown-before-liftoff の接触切替表示
+- `src/lily_contact_planner/unified_planner.py` — public planner class
+- `scripts/run_rollwalk_720.py` — 0°→720° 基準タスク再現スクリプト
+- `docs/formulation.md` — Level-1 数理定式化
+- `docs/algorithm_solver.md` — solver 構造とコード対応
+- `docs/validated_baseline.md` — baseline と検証範囲
+- `docs/progress_20260813.md` — 現在の実験変更点と world-frame task
+- `docs/visualization.md` — 表示専用補間の規約と制約
+- `tests/test_visualization.py` — touchdown/両支持が liftoff より先であることを確認
+- `results/` — baseline・実験結果
+
+## 実行方法
 
 ```bash
 python3 -m venv .venv
@@ -248,8 +330,18 @@ pip install -e .
 python scripts/run_rollwalk_720.py
 ```
 
-The full 720° search is intentionally computation-heavy; it is a research proof of concept, not a real-time planner.
+720° の full search は意図的に計算量が大きい研究用 proof of concept であり、現時点では real-time planner ではありません。
 
-## Status
+## 現在位置
 
-This repository preserves the **first angle-independent contact-planning baseline** while also recording the current world-frame multi-axis experiment. Next stages are dense continuous rollout/certification, explicit touchdown-before-liftoff transition planning, finite-thickness self-collision, general joystick/task commands, and stronger continuous optimization inside each discrete contact branch.
+この repository では、**最初の角度非依存 contact-planning baseline**を保持しつつ、world-frame 多軸タスクの検討結果も記録しています。
+
+今後の主な課題は
+
+- dense continuous rollout / certification
+- touchdown-before-liftoff を表示だけでなく planner 本体の有限時間接触遷移として扱うこと
+- finite-thickness self-collision
+- 一般 joystick/task command
+- 各離散接触 branch 内での連続最適化の強化
+
+です。
