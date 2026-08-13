@@ -92,7 +92,7 @@ The current multi-axis task defines rotations in the **world frame**:
 
 A reusable `YawPitchRollWorldTask` is now in `src/lily_contact_planner/tasks.py`. A fresh partial search reached total progress 255° = 45° yaw + 210° pitch, with 7 DFS nodes, 6 contact events, zero stored-state joint-limit violations, and support-region validity at all 256 stored 1° states. The roll phase has not yet been reached in this world-frame experiment.
 
-For visualization, contact switches are displayed in the order `touchdown -> dual support -> support transfer -> liftoff`. This is currently a **display-only reconstruction**, not yet an explicitly optimized finite-duration contact-transfer phase.
+For visualization, contact switches are displayed in the order `old support retained -> touchdown -> old+new dual support -> support transfer -> liftoff`. The reusable implementation is now checked in as `src/lily_contact_planner/visualization.py`, with the ordering documented in [`docs/visualization.md`](docs/visualization.md) and protected by `tests/test_visualization.py`. These inserted transition frames remain a **display-only reconstruction**, not yet an explicitly optimized finite-duration contact-transfer phase.
 
 See [`docs/progress_20260813.md`](docs/progress_20260813.md) and `results/yaw45_pitch480_world_partial_255_summary.json` for the exact scope and limitations.
 
@@ -104,12 +104,15 @@ See [`docs/progress_20260813.md`](docs/progress_20260813.md) and `results/yaw45_
 - `src/lily_contact_planner/planner_base.py` — continuous kinematic feasibility layer
 - `src/lily_contact_planner/planner_touchdown.py` — touchdown generation and local contact ranking
 - `src/lily_contact_planner/planner_search.py` — DFS/backtracking contact-event search
+- `src/lily_contact_planner/visualization.py` — display interpolation and touchdown-before-liftoff support-switch ordering
 - `src/lily_contact_planner/unified_planner.py` — public unified planner class
 - `scripts/run_rollwalk_720.py` — 0°→720° reproducibility entry point
 - `docs/formulation.md` — mathematical Level-1 formulation
 - `docs/algorithm_solver.md` — solver architecture and code map
 - `docs/validated_baseline.md` — baseline and validation boundary
 - `docs/progress_20260813.md` — current experimental changes and world-frame task
+- `docs/visualization.md` — visualization-only interpolation convention and limitations
+- `tests/test_visualization.py` — verifies new-foot touchdown/dual support occurs before old-foot liftoff
 - `results/` — reference and experimental search summaries
 
 ## Run
