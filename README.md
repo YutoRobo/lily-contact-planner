@@ -15,6 +15,130 @@ The body geometric-center height is fixed at 0.35 m and the benchmark path is
 
 This body path is a **task definition**, not a hard-coded gait. Contact switching remains autonomous.
 
+## Defining arbitrary translation and rotation
+
+The contact planner only needs a task path that returns the desired body pose
+
+```text
+(t(s), R(s))
+```
+
+for a path parameter `s`. Here `t(s) = [x, y, z]` is the body geometric-center position in the **world frame**, and `R(s)` is the body orientation in `SO(3)`.
+
+### Arbitrary translation
+
+Translation is specified directly in world coordinates. For example, a straight-line motion from `p0` with world-frame direction `d` is
+
+```python
+p = p0 + distance(s) * d / np.linalg.norm(d)
+```
+
+where `d` can point in any 3-D direction. A general curved path may simply define `x(s)`, `y(s)`, and `z(s)` independently.
+
+Examples:
+
+```python
+# +x translation
+p = np.array([distance, 0.0, 0.35])
+
+# +y translation
+p = np.array([0.0, distance, 0.35])
+
+# diagonal xy translation
+p = np.array([distance / np.sqrt(2), distance / np.sqrt(2), 0.35])
+```
+
+### Arbitrary rotation about a world-frame axis
+
+Rotation is defined by a **world-frame rotation axis**
+
+```text
+nW = [nx, ny, nz],  ||nW|| = 1
+```
+
+and an angle `theta`. The orientation update is
+
+```text
+R(theta) = Exp([nW]x theta) R0
+```
+
+where `[nW]x` is the skew-symmetric matrix of `nW`. The important convention is that the incremental rotation is multiplied on the **left**, so the commanded axis remains fixed in the world frame.
+
+With SciPy this can be written as
+
+```python
+from scipy.spatial.transform import Rotation
+
+nW = np.asarray(nW, dtype=float)
+nW = nW / np.linalg.norm(nW)
+R_inc = Rotation.from_rotvec(theta_rad * nW).as_matrix()
+R = R_inc @ R0
+```
+
+The usual yaw/pitch/roll commands are only special cases:
+
+```text
++yaw   : nW = [ 0,  0,  1]
++pitch : nW = [ 0,  1,  0]
+-roll  : nW = [-1,  0,  0]
+```
+
+For example, rotation about a 45° diagonal axis in the world `xy` plane uses
+
+```python
+nW = np.array([1.0, 1.0, 0.0]) / np.sqrt(2.0)
+```
+
+### Simultaneous arbitrary translation + rotation
+
+Translation and rotation are independent parts of the task pose. A task may therefore combine any world-frame translation path with any world-frame rotation axis:
+
+```python
+def pose(s):
+    # arbitrary world-frame translation
+    p = p0 + distance(s) * direction_world
+
+    # arbitrary world-frame rotation
+    theta = angle(s)
+    R_inc = Rotation.from_rotvec(theta * axis_world).as_matrix()
+    R = R_inc @ R0
+    return p, R
+```
+
+`direction_world` and `axis_world` do not need to be parallel. This allows, for example, diagonal translation while rotating about an unrelated 3-D axis.
+
+### Piecewise motion commands
+
+Longer maneuvers can be constructed by chaining pose segments. If segment `j` starts from orientation `R_start`, define
+
+```text
+R_j(theta) = Exp([nW_j]x theta) R_start
+```
+
+and use the terminal pose of that segment as the initial pose of the next segment. This is how the current experimental task represents
+
+```text
+in-place +yaw 45°
+-> +x translation with +pitch 480°
+-> +y translation with -roll 480°
+```
+
+while keeping every commanded rotation axis defined in the world frame.
+
+For future joystick-style commands, the same convention can be expressed using desired world-frame translational and angular velocities
+
+```text
+v_des^W, omega_des^W
+```
+
+with a small-step orientation update
+
+```text
+R_{k+1} = Exp([omega_des^W]x Delta s) R_k.
+```
+
+The current planner still receives a prescribed body task path; it does **not yet optimize the body translation/orientation path itself**. It autonomously searches the contact sequence and leg configurations needed to follow the supplied task.
+
 ## Unified algorithm
 
 At every path sample the same rule is used:
