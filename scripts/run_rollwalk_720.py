@@ -49,6 +49,26 @@ def main():
         for key, value in result.items()
         if key not in ("final_q", "final_anchors")
     }
+    out["task"] = {
+        "type": "ForwardRollTask",
+        "body_height_m": 0.35,
+        "forward_m_per_deg": 1.0 / 300.0,
+        "max_progress_deg": 720.0,
+    }
+    out["initial_condition"] = {
+        "q0_deg": Q0_DEG.tolist(),
+        "support": list(INITIAL_SUPPORT),
+    }
+    out["kinematics"] = {
+        "a": 0.15,
+        "L2": 0.30,
+        "L3": 0.30,
+        "delta_top": 0.0,
+        "delta_bottom": 0.0,
+        "eps_top": +1.0,
+        "eps_bottom": -1.0,
+    }
+
     results_dir = ROOT / "results"
     results_dir.mkdir(exist_ok=True)
     path = results_dir / "latest_search_report.json"
