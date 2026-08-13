@@ -32,7 +32,7 @@ There are **no angle-specific branches**, saved future states, or pre-programmed
 
 ## What solver is actually used?
 
-The current 0°–720° baseline is **not one global NLP**, and it is **not a QP**. It uses two layers:
+The checked-in 0°–720° baseline is **not one global NLP**, and it is **not a QP**. It uses two layers:
 
 - **Discrete contact decisions:** depth-first search (DFS) with backtracking.
 - **Continuous joint configurations:** bounded nonlinear least-squares inverse kinematics using `scipy.optimize.least_squares`.
@@ -80,6 +80,22 @@ The event sequence is **output**, not an input gait schedule.
 
 Important limitation: this milestone certifies the **hybrid contact/search sequence and per-state Level-1 feasibility used inside the planner**. Dense continuous-trajectory certification between every numerical sample is a separate validation step. Self-collision is currently measured by the Level-1 checker but is intentionally not used to reject contact-search candidates while stepping logic is being developed.
 
+## Experimental progress — 2026-08-13
+
+The original 720° result above remains the historical baseline. Current experiments keep the same DFS/backtracking contact-search architecture but have introduced several implementation changes: analytic 3-DOF leg IK for fast experimental solves, a requirement that a contact switch enable at least one real next task increment, expanded touchdown fallback after normal branches fail, and lighter search parameters.
+
+The current multi-axis task defines rotations in the **world frame**:
+
+- 0°–45°: in-place `+yaw` about world `+z`;
+- 45°–525°: `+x` translation with `+pitch` about world `+y`;
+- 525°–1005°: `+y` translation with `-roll` about world `+x`.
+
+A reusable `YawPitchRollWorldTask` is now in `src/lily_contact_planner/tasks.py`. A fresh partial search reached total progress 255° = 45° yaw + 210° pitch, with 7 DFS nodes, 6 contact events, zero stored-state joint-limit violations, and support-region validity at all 256 stored 1° states. The roll phase has not yet been reached in this world-frame experiment.
+
+For visualization, contact switches are displayed in the order `touchdown -> dual support -> support transfer -> liftoff`. This is currently a **display-only reconstruction**, not yet an explicitly optimized finite-duration contact-transfer phase.
+
+See [`docs/progress_20260813.md`](docs/progress_20260813.md) and `results/yaw45_pitch480_world_partial_255_summary.json` for the exact scope and limitations.
+
 ## Structure
 
 - `src/lily_contact_planner/kinematics.py` — Lily forward kinematics and Jacobians
@@ -93,7 +109,8 @@ Important limitation: this milestone certifies the **hybrid contact/search seque
 - `docs/formulation.md` — mathematical Level-1 formulation
 - `docs/algorithm_solver.md` — solver architecture and code map
 - `docs/validated_baseline.md` — baseline and validation boundary
-- `results/` — reference search result
+- `docs/progress_20260813.md` — current experimental changes and world-frame task
+- `results/` — reference and experimental search summaries
 
 ## Run
 
@@ -108,4 +125,4 @@ The full 720° search is intentionally computation-heavy; it is a research proof
 
 ## Status
 
-This repository freezes the **first angle-independent contact-planning baseline**. Next stages are dense continuous rollout/certification, finite-thickness self-collision, general joystick/task commands, and stronger continuous optimization inside each discrete contact branch.
+This repository preserves the **first angle-independent contact-planning baseline** while also recording the current world-frame multi-axis experiment. Next stages are dense continuous rollout/certification, explicit touchdown-before-liftoff transition planning, finite-thickness self-collision, general joystick/task commands, and stronger continuous optimization inside each discrete contact branch.
