@@ -1,0 +1,32 @@
+{
+  "task_frame": "world",
+  "task": {
+    "phase_1": "in-place +yaw 45 deg about world +z",
+    "phase_2": "+x translation + +pitch 480 deg about world +y",
+    "phase_3": "+y translation + -roll 480 deg about world +x"
+  },
+  "partial_result": {
+    "success": true,
+    "best_angle_deg": 255.0,
+    "completed_yaw_deg": 45.0,
+    "completed_pitch_deg": 210.0,
+    "completed_roll_deg": 0.0,
+    "nodes": 7,
+    "n_contact_events": 6,
+    "final_support": [0, 1, 7],
+    "elapsed_s": 121.19902801513672
+  },
+  "stored_state_audit": {
+    "n_states": 256,
+    "angle_step_deg": 1.0,
+    "joint_limit_max_violation_rad": 0.0,
+    "max_support_foot_abs_z_m": 3.885780586188048e-16,
+    "min_swing_foot_z_m": 0.003708166833604365,
+    "min_link_endpoint_z_m": -3.885780586188048e-16,
+    "min_body_clearance_m": 0.09019514494547237,
+    "support_region_all_states_ok": true
+  },
+  "algorithm_note": "Same DFS/backtracking contact-search architecture as the baseline, but the experimental implementation uses analytic 3-DOF leg IK, progress pruning after contact switches, expanded touchdown fallback, and modified search parameters.",
+  "visualization_note": "Display-only interpolation uses touchdown-before-liftoff ordering: pre-switch -> touchdown approach -> dual support -> support transfer -> liftoff. Interpolated frames are not continuous-trajectory certification.",
+  "validation_boundary": "Level-1 kinematic/contact result only; no dynamics, force/friction, impact, finite-thickness collision, or continuous-time hardware certification."
+}
