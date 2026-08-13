@@ -1,7 +1,13 @@
 
 import numpy as np
 from dataclasses import dataclass, asdict
-from scipy.spatial import ConvexHull, QhullError
+from scipy.spatial import ConvexHull
+try:
+    from scipy.spatial import QhullError
+except ImportError:
+    # Compatibility with older SciPy versions where QhullError was not
+    # re-exported from scipy.spatial.
+    from scipy.spatial.qhull import QhullError
 from scipy.spatial.transform import Rotation
 
 
@@ -138,7 +144,6 @@ def _point_in_support_hull(point_xy, support_xy, tol=1e-9):
     rank = np.linalg.matrix_rank(centered, tol=max(tol, 1e-12))
 
     if len(pts) == 2 or rank < 2:
-        # Feasible set is a line segment between the extreme projected points.
         direction = pts[1] - pts[0]
         n = np.linalg.norm(direction)
         if n <= tol:
@@ -154,14 +159,12 @@ def _point_in_support_hull(point_xy, support_xy, tol=1e-9):
         inside = (perp <= tol) and (sp >= lo - tol) and (sp <= hi + tol)
         if inside:
             return True, 0.0
-        # Negative diagnostic margin.
         endpoint_violation = max(lo - sp, sp - hi, 0.0)
         return False, -max(perp, endpoint_violation)
 
     try:
         hull = ConvexHull(pts)
     except QhullError:
-        # Fallback to line logic if numerically degenerate.
         direction = pts[np.argmax(np.linalg.norm(pts - pts[0], axis=1))] - pts[0]
         n = np.linalg.norm(direction)
         if n <= tol:
@@ -175,7 +178,6 @@ def _point_in_support_hull(point_xy, support_xy, tol=1e-9):
         inside = (perp <= tol) and (sp >= lo - tol) and (sp <= hi + tol)
         return inside, 0.0 if inside else -max(perp, max(lo-sp, sp-hi, 0.0))
 
-    # hull.equations rows: normal*x + offset <= 0 inside.
     vals = hull.equations[:, :2] @ p + hull.equations[:, 2]
     norms = np.linalg.norm(hull.equations[:, :2], axis=1)
     signed_inside_dist = -vals / norms
@@ -256,17 +258,6 @@ class Level1Checker:
         self.root_ignore_t = float(root_ignore_t)
 
     def check(self, body_pos, body_R, q, contact):
-        """
-        Parameters
-        ----------
-        body_pos : (F,3) or (3,)
-        body_R   : (F,3,3)
-        q        : (F,8,3)
-        contact  : (F,8) boolean/int
-
-        contact is interpreted at every frame.
-        If a foot is contact at consecutive frames, it must remain fixed in world.
-        """
         q = np.asarray(q, dtype=float)
         body_R = np.asarray(body_R, dtype=float)
         contact = np.asarray(contact).astype(bool)
@@ -286,7 +277,6 @@ class Level1Checker:
         if body_pos.shape != (F, 3):
             raise ValueError("body_pos must have shape (F,3) or (3,)")
 
-        # Diagnostics accumulators.
         max_joint_violation = 0.0
         max_lock_error = 0.0
         max_contact_z_err = 0.0
@@ -325,7 +315,6 @@ class Level1Checker:
             qf = q[f]
             cf = contact[f]
 
-            # --- Joint limits ---
             low_violation = np.maximum(self.kin.q_min - qf, 0.0)
             high_violation = np.maximum(qf - self.kin.q_max, 0.0)
             frame_joint_violation = float(np.max(np.maximum(low_violation, high_violation)))
@@ -337,7 +326,6 @@ class Level1Checker:
             if frame_joint_violation > self.joint_tol:
                 joint_limits_ok = False
 
-            # --- World geometry ---
             roots = []
             elbows = []
             feet = []
@@ -351,7 +339,6 @@ class Level1Checker:
             elbows = np.asarray(elbows)
             feet = np.asarray(feet)
 
-            # --- Contact height / swing ground ---
             support_idx = np.where(cf)[0]
             swing_idx = np.where(~cf)[0]
 
@@ -371,7 +358,6 @@ class Level1Checker:
                 if frame_min_swing < -self.ground_tol:
                     swing_foot_ground_ok = False
 
-            # --- Support foot lock across consecutive contact frames ---
             if previous_feet is not None:
                 keep = cf & previous_contact
                 if np.any(keep):
@@ -387,7 +373,6 @@ class Level1Checker:
             previous_feet = feet.copy()
             previous_contact = cf.copy()
 
-            # --- Support hull: body geometric center projection ---
             if len(support_idx) == 0:
                 support_region_ok = False
                 frame_margin = -np.inf
@@ -404,8 +389,6 @@ class Level1Checker:
                 min_support_margin = frame_margin
                 worst_support_frame = f
 
-            # --- Exact body cube vs ground ---
-            # Min world z of rotated cube = t_z - a * sum_j |R[z,j]|.
             body_min_z = float(t[2] - self.kin.a * np.sum(np.abs(R[2, :])))
             if body_min_z < min_body_clear:
                 min_body_clear = body_min_z
@@ -413,19 +396,13 @@ class Level1Checker:
             if body_min_z < -self.ground_tol:
                 body_ground_ok = False
 
-            # --- Link centerline vs ground ---
-            # L2 root->elbow and L3 elbow->foot.
-            # Support foot endpoint z=0 is allowed. Any negative endpoint implies
-            # the segment penetrates ground because z is linear along the segment.
             frame_min_link_z = np.inf
             for i in range(self.kin.n_legs):
-                # root->elbow
                 frame_min_link_z = min(
                     frame_min_link_z,
                     float(roots[i, 2]),
                     float(elbows[i, 2]),
                 )
-                # elbow->foot; foot endpoint is allowed at zero, never below.
                 frame_min_link_z = min(
                     frame_min_link_z,
                     float(elbows[i, 2]),
@@ -439,82 +416,55 @@ class Level1Checker:
             if frame_min_link_z < -self.ground_tol:
                 link_ground_ok = False
 
-            # --- Inter-leg self collision for zero-radius centerlines ---
             segments = []
             for i in range(self.kin.n_legs):
-                segments.append((i, 2, roots[i], elbows[i]))
-                segments.append((i, 3, elbows[i], feet[i]))
+                segments.append((i, 0, roots[i], elbows[i]))
+                segments.append((i, 1, elbows[i], feet[i]))
 
-            frame_min_interleg = np.inf
-            for a_idx in range(len(segments)):
-                leg_a, link_a, p0, p1 = segments[a_idx]
-                for b_idx in range(a_idx + 1, len(segments)):
-                    leg_b, link_b, q0, q1 = segments[b_idx]
-
-                    # Adjacent links of the same leg intentionally share J3.
-                    if leg_a == leg_b:
+            for ia in range(len(segments)):
+                lega, seg_a, p1, q1 = segments[ia]
+                for ib in range(ia + 1, len(segments)):
+                    legb, seg_b, p2, q2 = segments[ib]
+                    if lega == legb:
                         continue
-
-                    dist = _segment_segment_distance(p0, p1, q0, q1)
-                    frame_min_interleg = min(frame_min_interleg, dist)
-
-            if frame_min_interleg < min_interleg_dist:
-                min_interleg_dist = frame_min_interleg
-                worst_self_collision_frame = f
-
-            if frame_min_interleg < self.collision_tol:
-                self_collision_ok = False
-
-            # --- Link vs body cube ---
-            # Transform world link endpoints back to body frame.
-            # For L2, root is exactly a cube vertex; t=0 contact is allowed.
-            frame_link_body_collision = False
+                    dist = _segment_segment_distance(p1, q1, p2, q2)
+                    if dist < min_interleg_dist:
+                        min_interleg_dist = dist
+                        worst_self_collision_frame = f
+                    if dist < self.collision_tol:
+                        self_collision_ok = False
 
             for i in range(self.kin.n_legs):
-                root_B, elbow_B, foot_B = self.kin.leg_points_body(i, qf[i])
+                for p0w, p1w in ((roots[i], elbows[i]), (elbows[i], feet[i])):
+                    p0b = R.T @ (p0w - t)
+                    p1b = R.T @ (p1w - t)
+                    hit, t_enter, t_exit = _segment_aabb_intersection_interval(
+                        p0b,
+                        p1b,
+                        self.kin.a,
+                    )
+                    if hit:
+                        if t_exit is not None and t_exit > self.root_ignore_t:
+                            link_body_collision_ok = False
+                            worst_link_body_frame = f
 
-                hit, t_enter, t_exit = _segment_aabb_intersection_interval(
-                    root_B, elbow_B, self.kin.a
-                )
-                if hit and t_exit is not None and t_exit > self.root_ignore_t:
-                    # If the entire "intersection" is only the start point, t_exit≈0.
-                    frame_link_body_collision = True
-
-                hit, t_enter, t_exit = _segment_aabb_intersection_interval(
-                    elbow_B, foot_B, self.kin.a
-                )
-                if hit and t_exit is not None and t_exit >= 0.0 and t_enter <= 1.0:
-                    # L3 should not intersect the body at all.
-                    if t_exit - t_enter > self.root_ignore_t:
-                        frame_link_body_collision = True
-
-            if frame_link_body_collision:
-                link_body_collision_ok = False
-                if worst_link_body_frame < 0:
-                    worst_link_body_frame = f
-
-        # If there were no swing feet in the entire trajectory.
-        if np.isinf(min_swing_z):
-            min_swing_z = np.nan
-        if np.isinf(min_interleg_dist):
-            min_interleg_dist = np.nan
-
-        feasible = all([
-            joint_limits_ok,
-            support_foot_lock_ok,
-            support_contact_height_ok,
-            swing_foot_ground_ok,
-            support_region_ok,
-            body_ground_ok,
-            link_ground_ok,
-            self_collision_ok,
-            link_body_collision_ok,
-        ])
+        feasible = all(
+            [
+                joint_limits_ok,
+                support_foot_lock_ok,
+                support_contact_height_ok,
+                swing_foot_ground_ok,
+                support_region_ok,
+                body_ground_ok,
+                link_ground_ok,
+                self_collision_ok,
+                link_body_collision_ok,
+            ]
+        )
 
         return Level1Report(
             feasible=feasible,
             n_frames=F,
-
             joint_limits_ok=joint_limits_ok,
             support_foot_lock_ok=support_foot_lock_ok,
             support_contact_height_ok=support_contact_height_ok,
@@ -524,7 +474,6 @@ class Level1Checker:
             link_ground_ok=link_ground_ok,
             self_collision_ok=self_collision_ok,
             link_body_collision_ok=link_body_collision_ok,
-
             max_joint_limit_violation_rad=max_joint_violation,
             max_support_foot_lock_error_m=max_lock_error,
             max_support_contact_height_error_m=max_contact_z_err,
@@ -533,7 +482,6 @@ class Level1Checker:
             min_body_ground_clearance_m=min_body_clear,
             min_link_ground_height_m=min_link_z,
             min_interleg_segment_distance_m=min_interleg_dist,
-
             worst_joint_frame=worst_joint_frame,
             worst_support_lock_frame=worst_lock_frame,
             worst_support_height_frame=worst_contact_z_frame,
