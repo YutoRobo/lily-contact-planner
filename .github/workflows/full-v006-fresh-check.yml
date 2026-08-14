@@ -1,0 +1,64 @@
+name: Full v0.0.6 fresh check
+
+on:
+  push:
+    branches:
+      - agent/integrate-v006-chat-baseline
+  workflow_dispatch:
+
+jobs:
+  full-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install package
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+      - name: Run unchanged UnifiedContactPlanner
+        run: |
+          python - <<'PY'
+          import json
+          import numpy as np
+          from lily_contact_planner.kinematics import LilyKinematics
+          from lily_contact_planner.tasks import Pitch45ThenRoll45Task
+          from lily_contact_planner.unified_planner import UnifiedContactPlanner
+
+          kin = LilyKinematics()
+          task = Pitch45ThenRoll45Task()
+          planner = UnifiedContactPlanner(kin, task, max_roll_deg=90.0, verbose=True)
+          q0 = np.tile(np.deg2rad([0.0, 20.0, -30.0]), (8, 1))
+          support0 = (2, 4, 6)
+
+          result = planner.plan(q0, support0)
+          serial = dict(result)
+          if serial.get('final_q') is not None:
+              serial['final_q'] = np.asarray(serial['final_q']).tolist()
+          if serial.get('final_anchors') is not None:
+              serial['final_anchors'] = {
+                  str(k): np.asarray(v).tolist()
+                  for k, v in serial['final_anchors'].items()
+              }
+          with open('full_v006_fresh_result.json', 'w') as f:
+              json.dump(serial, f, indent=2)
+
+          print('FINAL_RESULT', json.dumps({
+              'success': result['success'],
+              'best_angle_deg': result['best_angle_deg'],
+              'nodes': result['nodes'],
+              'n_events': len(result.get('events', [])),
+              'final_support': result.get('final_support'),
+              'event_versions': [e.get('version') for e in result.get('events', [])],
+          }, indent=2), flush=True)
+          PY
+      - name: Upload result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: full-v006-fresh-result
+          path: full_v006_fresh_result.json
+          if-no-files-found: ignore
