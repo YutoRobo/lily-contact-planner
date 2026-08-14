@@ -1,0 +1,34 @@
+{
+  "source": "Chat-saved Pitch +45 deg -> Roll +45 deg completed trajectory",
+  "purpose": "Regression target for conservative v0.0.4-v0.0.6 integration. This file records observed behavior; it is not a hard-coded contact schedule for the planner.",
+  "status": "completed",
+  "frames": 2589,
+  "contact_events": 20,
+  "final_support": [0, 4, 5],
+  "final_rotation_error_deg": 2.35e-14,
+  "checker": {
+    "feasible": true,
+    "joint_limit_violations": 0,
+    "support_anchor_max_error_m": 1.15e-15,
+    "body_ground_min_clearance_m": 0.2648,
+    "inter_leg_capsule_min_clearance_m": 0.00258,
+    "body_link_min_clearance_m": 0.00346,
+    "max_adjacent_joint_step_deg": 6.82
+  },
+  "event_implementation_counts": {
+    "v0.0.4-prefix": 11,
+    "v0.0.5-multi": 1,
+    "v0.0.4-1to1": 7,
+    "v0.0.6-static-event": 1
+  },
+  "key_recovery": {
+    "phase": "roll",
+    "approx_angle_deg": 30.0,
+    "body_progress_during_recovery_deg": 0.0,
+    "support_before": [0, 5, 6],
+    "touchdown_leg": 4,
+    "liftoff_leg": 6,
+    "support_after": [0, 4, 5],
+    "note": "Static contact reconfiguration used to escape the Roll ~30 deg dead end."
+  }
+}
