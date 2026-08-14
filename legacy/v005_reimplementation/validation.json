@@ -8,7 +8,9 @@
     "touchdown_nodes": [3, 4],
     "liftoff_legs": [4, 6],
     "liftoff_nodes": [5, 6],
-    "support_after": [0, 2, 7]
+    "support_after": [0, 2, 7],
+    "executed_fraction": 0.6,
+    "executed_pitch_after_deg": 39.0
   },
   "touchdown_xy_m": [
     [-0.4859540313667812, 0.21362683017844633],
@@ -22,30 +24,41 @@
     "candidate_nlp_elapsed_s": 35.88309073448181,
     "accepted_candidates_at_1deg": 32
   },
-  "reimplementation_smoke": {
+  "exact_candidate_reconstruction": {
+    "sobol_seed": 1303,
+    "touchdown_seed_counts_by_leg": {"2": 5, "5": 5, "7": 5},
+    "generated_2touch_2liftoff": 225,
+    "terminal_support_hull_ok": 74,
+    "terminal_analytic_ik_ok": 42,
+    "sort_rule": "terminal support polygon area descending",
+    "successful_candidate_index_after_sort": 23,
+    "successful_seed_xy_max_abs_error_m": 7.3e-11
+  },
+  "reimplementation_nlp_validation": {
     "success": true,
-    "objective": 0.001722139494205316,
-    "eq_max": 1.1102230246251565e-15,
+    "objective": 0.0022096371820984786,
+    "slsqp_iterations": 1,
+    "slsqp_function_evaluations": 381,
+    "eq_max": 1.1657341758564144e-15,
     "ineq_min": -9.992007221626409e-16,
-    "terminal_rotation_error_deg": 4.459909113384563e-23,
-    "touchdown_xy_preserved": true
+    "dense_checker_feasible": true,
+    "min_support_margin_m": 0.03869897474478139,
+    "min_capsule_clearance_m": 0.09781396196071178,
+    "min_body_link_clearance_m": 0.009807446643022709,
+    "executed_node": 6,
+    "executed_fraction": 0.6,
+    "archived_support_at_executed_node": [0, 2, 7],
+    "body_position_max_error_m_at_executed_node": 6.6e-10,
+    "body_rotation_matrix_max_error_at_executed_node": 6.6e-9,
+    "joint_max_error_rad_at_executed_node": 0.074164
   },
   "recovered_initial_guess_rule": {
     "status": "strongly supported by archived executed trajectory",
     "touchdown_rule": "Before touchdown, move each future touchdown foot on a Cartesian straight-line path to the touchdown point and add a parabolic vertical lift 4*h*s*(1-s). At/after touchdown, lock the foot to the touchdown point.",
     "nominal_lift_m": 0.02,
-    "leg2": {
-      "touchdown_node": 3,
-      "intermediate_world_xy_exactly_linear": true,
-      "inferred_lift_m": [0.019485571631828704, 0.01948557157996353]
-    },
-    "leg7": {
-      "touchdown_node": 4,
-      "intermediate_world_xy_exactly_linear": true,
-      "inferred_lift_m": [0.018856180765859303, 0.020000000008777774, 0.018856180825232327]
-    },
-    "historical_consistency": "v0.0.3 already used a 20 mm vertical seed after liftoff; the recovered v0.0.5 touchdown arc uses the same scale.",
-    "implementation": "multi_contact_v005_seeded.py"
+    "leg2_inferred_lift_m": [0.019485571631828704, 0.01948557157996353],
+    "leg7_inferred_lift_m": [0.018856180765859303, 0.020000000008777774, 0.018856180825232327],
+    "historical_consistency": "v0.0.3 already used a 20 mm vertical seed after liftoff; the recovered v0.0.5 touchdown arc uses the same scale."
   },
   "archived_search_evidence": {
     "horizon_order_deg": [5, 4, 3, 2, 1],
@@ -54,5 +67,11 @@
     "at_1deg_terminal_ik_ok": 42,
     "at_1deg_solved_candidates": 32,
     "at_1deg_accepted_high_dense": 32
+  },
+  "integration_status": {
+    "v005_multi_connected_to_unified_branch": true,
+    "v006_static_prm_connected": true,
+    "full_v006_reproduction_not_yet_claimed": true,
+    "blocking_difference": "The current unified one-to-one stage still uses the newer local IK/DFS contact edit. The archived successful v0.0.4/v0.0.6 one-to-one events used finite-horizon SLSQP NLP and executed through the liftoff fraction before replanning. Changing this stage is an algorithm-semantic change and requires user approval before implementation."
   }
 }
