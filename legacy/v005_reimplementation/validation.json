@@ -28,8 +28,24 @@
     "eq_max": 1.1102230246251565e-15,
     "ineq_min": -9.992007221626409e-16,
     "terminal_rotation_error_deg": 4.459909113384563e-23,
-    "touchdown_xy_preserved": true,
-    "note": "Same event schedule/contact locations and 1deg terminal pose are feasible. Swing-joint seed trajectory is not yet bitwise-equivalent to archived v0.0.5; max difference across the executed first seven NLP nodes was about 1.193 rad."
+    "touchdown_xy_preserved": true
+  },
+  "recovered_initial_guess_rule": {
+    "status": "strongly supported by archived executed trajectory",
+    "touchdown_rule": "Before touchdown, move each future touchdown foot on a Cartesian straight-line path to the touchdown point and add a parabolic vertical lift 4*h*s*(1-s). At/after touchdown, lock the foot to the touchdown point.",
+    "nominal_lift_m": 0.02,
+    "leg2": {
+      "touchdown_node": 3,
+      "intermediate_world_xy_exactly_linear": true,
+      "inferred_lift_m": [0.019485571631828704, 0.01948557157996353]
+    },
+    "leg7": {
+      "touchdown_node": 4,
+      "intermediate_world_xy_exactly_linear": true,
+      "inferred_lift_m": [0.018856180765859303, 0.020000000008777774, 0.018856180825232327]
+    },
+    "historical_consistency": "v0.0.3 already used a 20 mm vertical seed after liftoff; the recovered v0.0.5 touchdown arc uses the same scale.",
+    "implementation": "multi_contact_v005_seeded.py"
   },
   "archived_search_evidence": {
     "horizon_order_deg": [5, 4, 3, 2, 1],
