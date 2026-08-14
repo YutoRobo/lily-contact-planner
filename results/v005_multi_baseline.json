@@ -1,0 +1,20 @@
+{
+  "source": "recovered v0.0.5 event from verified v0.0.6 trajectory/report",
+  "phase": "pitch",
+  "start_pitch_deg_approx": 38.4,
+  "contact_horizon_deg": 1.0,
+  "touchdown_legs": [2, 7],
+  "touchdown_nodes": [3, 4],
+  "liftoff_legs": [4, 6],
+  "liftoff_nodes": [5, 6],
+  "support_before": [0, 4, 6],
+  "support_after": [0, 2, 7],
+  "touchdown_xy": [
+    [-0.4859540313667812, 0.21362683017844633],
+    [0.402872311124871, 0.2821647320536341]
+  ],
+  "objective": 0.002201050947590199,
+  "candidate_nlp_elapsed_s": 35.88309073448181,
+  "multi_search_elapsed_s": 338.25063920021057,
+  "important_behavior": "body pose progresses through the finite horizon while the two touchdowns and two liftoffs occur at distinct NLP nodes; this is not a fixed-body reconfiguration"
+}
