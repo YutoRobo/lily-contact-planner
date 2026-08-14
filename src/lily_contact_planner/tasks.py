@@ -29,12 +29,16 @@ class Pitch45ThenRoll45Task:
     """In-place world pitch +45 deg followed by world roll +45 deg.
 
     This is the regression task used for the successful Chat v0.0.6 baseline.
-    The scalar planner progress ``s_deg`` runs from 0 to 90 deg.  Translation
-    is intentionally zero.  During the second phase, world-frame roll is
+    The scalar planner progress ``s_deg`` runs from 0 to 90 deg. Translation
+    is intentionally zero. During the second phase, world-frame roll is
     left-multiplied onto the completed pitch orientation.
+
+    ``body_height_m`` is temporarily fixed to the archived successful v0.0.6
+    regression height. This constant is a reproduction aid only and must be
+    removed when the task is generalized after baseline verification.
     """
 
-    body_height_m: float = 0.35
+    body_height_m: float = 0.524575783
     pitch_deg: float = 45.0
     roll_deg: float = 45.0
 
