@@ -1,0 +1,31 @@
+{
+  "purpose": "Validate automatic static-recovery candidate generation against the archived successful v0.0.6 Roll30 state.",
+  "archived_state": {
+    "trajectory_frame": 1988,
+    "progress_deg": 75.0,
+    "pitch_deg": 45.0,
+    "roll_deg": 30.0,
+    "support_before": [0, 5, 6]
+  },
+  "candidate_generation": {
+    "generator": "v0.0.4 Sobol ground-contact candidates",
+    "seed": 123,
+    "touchdown_leg": 4,
+    "successful_candidate_per_leg_index_zero_based": 2,
+    "successful_touchdown_xy_m": [-0.371068198, 0.291921204],
+    "touchdown_xy_match_error_m": 7.850462293418876e-17
+  },
+  "static_transition": {
+    "touchdown_leg": 4,
+    "liftoff_leg": 6,
+    "support_after": [0, 4, 5],
+    "reachability_test": "finite-thickness PRM, seed 991",
+    "direct_joint_segment_required": false
+  },
+  "downstream_check": {
+    "support_after_solvable_at_roll30": true,
+    "predicted_remaining_progress_deg": 15.0,
+    "reaches_task_end_roll45": true
+  },
+  "scope_note": "This validation confirms recovery of the historically successful static candidate and downstream support feasibility. It is not yet a completed fresh 0->Pitch45->Roll45 end-to-end run."
+}
