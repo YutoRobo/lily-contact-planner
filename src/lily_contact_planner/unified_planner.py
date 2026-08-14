@@ -9,10 +9,12 @@ from .planner_base import PlannerBaseMixin, PlannerSettings
 from .planner_touchdown import TouchdownSearchMixin
 from .planner_search import DfsSearchMixin
 from .prm_recovery import PRMStaticRecoveryMixin
+from .multi_contact_v005 import V005MultiRecoveryMixin
 
 
 class UnifiedContactPlanner(
     PRMStaticRecoveryMixin,
+    V005MultiRecoveryMixin,
     DfsSearchMixin,
     TouchdownSearchMixin,
     PlannerBaseMixin,
