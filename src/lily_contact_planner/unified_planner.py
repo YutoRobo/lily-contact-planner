@@ -9,11 +9,13 @@ from .planner_base import PlannerBaseMixin, PlannerSettings
 from .planner_touchdown import TouchdownSearchMixin
 from .staged_search_v006 import V006StagedSearchMixin
 from .prm_recovery import PRMStaticRecoveryMixin
+from .static_prm_candidates import StaticPRMCandidateMixin
 from .multi_contact_v005 import V005MultiRecoveryMixin
 from .v004_success_seed import V004SuccessfulSeedMixin
 
 
 class UnifiedContactPlanner(
+    StaticPRMCandidateMixin,
     PRMStaticRecoveryMixin,
     V005MultiRecoveryMixin,
     V004SuccessfulSeedMixin,
