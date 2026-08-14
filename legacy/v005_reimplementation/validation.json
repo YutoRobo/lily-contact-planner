@@ -1,0 +1,42 @@
+{
+  "source": "verified v0.0.6 trajectory/report, v0.0.5 multi-contact event",
+  "initial_pitch_deg": 38.4,
+  "initial_support": [0, 4, 6],
+  "target_horizon_deg": 1.0,
+  "event_schedule": {
+    "touchdown_legs": [2, 7],
+    "touchdown_nodes": [3, 4],
+    "liftoff_legs": [4, 6],
+    "liftoff_nodes": [5, 6],
+    "support_after": [0, 2, 7]
+  },
+  "touchdown_xy_m": [
+    [-0.4859540313667812, 0.21362683017844633],
+    [0.402872311124871, 0.2821647320536341]
+  ],
+  "original_v005": {
+    "objective": 0.002201050947590199,
+    "slsqp_iterations": 1,
+    "candidate_index": 23,
+    "multi_search_elapsed_s": 338.25063920021057,
+    "candidate_nlp_elapsed_s": 35.88309073448181,
+    "accepted_candidates_at_1deg": 32
+  },
+  "reimplementation_smoke": {
+    "success": true,
+    "objective": 0.001722139494205316,
+    "eq_max": 1.1102230246251565e-15,
+    "ineq_min": -9.992007221626409e-16,
+    "terminal_rotation_error_deg": 4.459909113384563e-23,
+    "touchdown_xy_preserved": true,
+    "note": "Same event schedule/contact locations and 1deg terminal pose are feasible. Swing-joint seed trajectory is not yet bitwise-equivalent to archived v0.0.5; max difference across the executed first seven NLP nodes was about 1.193 rad."
+  },
+  "archived_search_evidence": {
+    "horizon_order_deg": [5, 4, 3, 2, 1],
+    "patterns_tested_each_horizon": [[2, 2], [2, 1], [1, 2]],
+    "pattern_2_2_generated_candidates_per_horizon": 225,
+    "at_1deg_terminal_ik_ok": 42,
+    "at_1deg_solved_candidates": 32,
+    "at_1deg_accepted_high_dense": 32
+  }
+}
