@@ -25,6 +25,37 @@ class ForwardRollTask:
 
 
 @dataclass(frozen=True)
+class Pitch45ThenRoll45Task:
+    """In-place world pitch +45 deg followed by world roll +45 deg.
+
+    This is the regression task used for the successful Chat v0.0.6 baseline.
+    The scalar planner progress ``s_deg`` runs from 0 to 90 deg.  Translation
+    is intentionally zero.  During the second phase, world-frame roll is
+    left-multiplied onto the completed pitch orientation.
+    """
+
+    body_height_m: float = 0.35
+    pitch_deg: float = 45.0
+    roll_deg: float = 45.0
+
+    @property
+    def total_progress_deg(self):
+        return float(self.pitch_deg + self.roll_deg)
+
+    def pose(self, s_deg: float):
+        s = float(np.clip(s_deg, 0.0, self.total_progress_deg))
+        t = np.array([0.0, 0.0, self.body_height_m], dtype=float)
+        if s <= self.pitch_deg:
+            R = Rotation.from_euler("y", s, degrees=True).as_matrix()
+            return t, R
+
+        r = s - self.pitch_deg
+        Ry = Rotation.from_euler("y", self.pitch_deg, degrees=True).as_matrix()
+        Rx = Rotation.from_euler("x", r, degrees=True).as_matrix()
+        return t, Rx @ Ry
+
+
+@dataclass(frozen=True)
 class YawPitchRollWorldTask:
     """World-frame task used by the 2026-08-13 multi-axis experiment.
 
