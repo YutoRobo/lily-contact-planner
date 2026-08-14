@@ -8,9 +8,15 @@ discrete; continuous support/swing motion is solved with nonlinear kinematics.
 from .planner_base import PlannerBaseMixin, PlannerSettings
 from .planner_touchdown import TouchdownSearchMixin
 from .planner_search import DfsSearchMixin
+from .prm_recovery import PRMStaticRecoveryMixin
 
 
-class UnifiedContactPlanner(DfsSearchMixin, TouchdownSearchMixin, PlannerBaseMixin):
+class UnifiedContactPlanner(
+    PRMStaticRecoveryMixin,
+    DfsSearchMixin,
+    TouchdownSearchMixin,
+    PlannerBaseMixin,
+):
     """Angle-independent hybrid discrete-contact / nonlinear-IK planner."""
 
 
