@@ -6,6 +6,10 @@ on:
       - agent/integrate-v006-chat-baseline
   workflow_dispatch:
 
+concurrency:
+  group: full-v006-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   full-check:
     runs-on: ubuntu-latest
