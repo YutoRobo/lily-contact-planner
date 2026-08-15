@@ -2,6 +2,8 @@
 """Run the fresh Pitch45 -> Roll45 regression with UnifiedContactPlanner.
 
 This is the single entry point used by both local Ubuntu runs and GitHub Actions.
+The planner also writes an atomic BEST-state checkpoint whenever progress
+improves so an interrupted long run can still be inspected and replayed.
 """
 
 import argparse
@@ -32,7 +34,12 @@ def main():
     parser.add_argument(
         "--output",
         default="full_v006_fresh_result.json",
-        help="JSON output path",
+        help="Final JSON output path",
+    )
+    parser.add_argument(
+        "--checkpoint",
+        default="full_v006_fresh_checkpoint.json",
+        help="Atomic BEST-state checkpoint JSON path",
     )
     parser.add_argument(
         "--quiet",
@@ -57,10 +64,21 @@ def main():
         max_roll_deg=90.0,
         verbose=not args.quiet,
     )
+    planner.checkpoint_path = str(Path(args.checkpoint))
+
     q0 = np.tile(np.deg2rad([0.0, 20.0, -30.0]), (8, 1))
     support0 = (2, 4, 6)
 
-    result = planner.plan(q0, support0)
+    print("CHECKPOINT_PATH", planner.checkpoint_path, flush=True)
+    try:
+        result = planner.plan(q0, support0)
+    except KeyboardInterrupt:
+        print(
+            "INTERRUPTED checkpoint retained at " + planner.checkpoint_path,
+            flush=True,
+        )
+        return
+
     serial = _serializable_result(result)
 
     output = Path(args.output)
@@ -76,6 +94,7 @@ def main():
         "final_support": result.get("final_support"),
         "event_versions": [e.get("version") for e in result.get("events", [])],
         "output": str(output),
+        "checkpoint": planner.checkpoint_path,
     }
     print("FINAL_RESULT", json.dumps(summary, indent=2), flush=True)
 
