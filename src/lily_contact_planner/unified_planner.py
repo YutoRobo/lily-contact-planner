@@ -12,9 +12,11 @@ from .prm_recovery import PRMStaticRecoveryMixin
 from .static_prm_candidates import StaticPRMCandidateMixin
 from .staged_multi_v005 import V005StagedHorizonMixin
 from .v004_success_seed import V004SuccessfulSeedMixin
+from .checkpoint_trajectory import CheckpointTrajectoryMixin
 
 
 class UnifiedContactPlanner(
+    CheckpointTrajectoryMixin,
     StaticPRMCandidateMixin,
     PRMStaticRecoveryMixin,
     V005StagedHorizonMixin,
