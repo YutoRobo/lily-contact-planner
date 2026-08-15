@@ -21,13 +21,25 @@ def support_area(points_xy):
     except QhullError: return 0.0
 
 
-def generate_contact_candidates_v004(kin,state,settings=V004Settings(),seed=0):
-    """Generate 1-touchdown x seed x 1-liftoff candidates; event nodes are fixed."""
+def generate_contact_candidates_v004(
+    kin,state,settings=V004Settings(),seed=0,touchdown_seed_ranks=None
+):
+    """Generate 1-touchdown x ranked seed x 1-liftoff candidates.
+
+    ``touchdown_seed_ranks`` is 1-based and filters only the already-ranked
+    touchdown initial guesses.  The underlying Sobol generation, area ranking,
+    spatial separation, touchdown-leg order, and liftoff-leg order are unchanged.
+    ``None`` preserves the recovered v0.0.4 behavior and returns every retained
+    touchdown seed.
+    """
     state.validate(kin)
     contact=np.asarray(state.contact,bool)
     support_idx=[int(i) for i in np.where(contact)[0]]
     swing_idx=[int(i) for i in np.where(~contact)[0]]
     support_xy=[np.asarray(state.anchors_world[i],float)[:2] for i in support_idx]
+    ranks=None if touchdown_seed_ranks is None else {
+        int(r) for r in touchdown_seed_ranks if int(r)>=1
+    }
     out=[]
     for leg in swing_idx:
         sampler=qmc.Sobol(d=3,scramble=True,seed=int(seed)+7919*leg)
@@ -51,7 +63,9 @@ def generate_contact_candidates_v004(kin,state,settings=V004Settings(),seed=0):
                 continue
             selected.append((area,xy))
             if len(selected)>=settings.touchdown_seeds_per_leg: break
-        for area,xy in selected:
+        for seed_rank,(area,xy) in enumerate(selected,start=1):
+            if ranks is not None and seed_rank not in ranks:
+                continue
             for lo in support_idx:
                 out.append(ContactCandidateV004(leg,np.asarray(xy,float),lo,float(area)))
     return out
