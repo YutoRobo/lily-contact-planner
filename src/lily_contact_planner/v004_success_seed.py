@@ -4,6 +4,13 @@ Archived trajectories show that future touchdown feet approach the ground point
 with linear Cartesian XY and a 20 mm sinusoidal Z arc before touchdown.  This
 seed is what makes the later v0.0.4-labelled one-to-one events reproduce the
 verified v0.0.6 run.
+
+Candidate handling follows the recovered v0.0.4 planner semantics/specification:
+Sobol touchdown seeds are ranked by support-polygon area and spatially
+separated in ``candidate_v004``; every resulting touchdown/liftoff candidate is
+then solved by the finite-horizon NLP and independently dense-checked.  The
+lost v0.0.5 ``solve_all_contact_candidates_local`` source is not reconstructed
+by inventing an extra prescreen here.
 """
 
 import numpy as np
@@ -58,25 +65,9 @@ class V004SuccessfulSeedMixin(V004RecedingHorizonMixin):
             target_t, target_R = self._v004_target(angle_deg, float(h))
             accepted = []
             solved = 0
+            attempted = 0
             for candidate_index, cand in enumerate(candidates):
-                new_support = (set(support) | {int(cand.touchdown_leg)}) - {int(cand.liftoff_leg)}
-                td_seed = np.array([
-                    cand.touchdown_seed_xy[0],
-                    cand.touchdown_seed_xy[1],
-                    0.0,
-                ])
-                terminal_ok = True
-                for leg in new_support:
-                    anchor = td_seed if leg == int(cand.touchdown_leg) else anchors[int(leg)]
-                    if not analytic_leg_ik_world(
-                        self.kin, target_t, target_R, int(leg),
-                        np.asarray(anchor, float), q_reference=q[int(leg)],
-                    ):
-                        terminal_ok = False
-                        break
-                if not terminal_ok:
-                    continue
-
+                attempted += 1
                 sol = _SuccessfulContactSwitchNLPV004(
                     self.kin, st, cand, target_t, target_R, cfg
                 ).solve()
@@ -91,6 +82,8 @@ class V004SuccessfulSeedMixin(V004RecedingHorizonMixin):
 
             trials.append({
                 'horizon_deg': float(h),
+                'candidate_count': int(len(candidates)),
+                'attempted_candidates': int(attempted),
                 'solved_candidates': int(solved),
                 'accepted': int(len(accepted)),
             })
