@@ -84,19 +84,35 @@ class _SuccessfulContactSwitchNLPV004(ContactSwitchNLPV004):
 class V004SuccessfulSeedMixin(V004RecedingHorizonMixin):
     """v0.0.4 contact recovery with timeout and first-feasible early stop."""
 
-    def _v004_contact_recovery(self, angle_deg, q, support, anchors):
+    def _v004_contact_recovery(
+        self,
+        angle_deg,
+        q,
+        support,
+        anchors,
+        horizons=None,
+        seed_override=None,
+        advance_seed=True,
+    ):
         cfg = self._v004_settings()
         st = self._v004_state(angle_deg, q, support, anchors)
-        seed = int(getattr(self, '_v004_contact_seed', 0))
+        current_seed = int(getattr(self, '_v004_contact_seed', 0))
+        seed = current_seed if seed_override is None else int(seed_override)
         candidates = list(generate_contact_candidates_v004(
             self.kin, st, cfg, seed=seed
         ))
-        self._v004_contact_seed = seed + 1
+        if advance_seed:
+            self._v004_contact_seed = current_seed + 1
 
         phase_end = self._v004_phase_end(angle_deg)
         max_h = int(np.floor(min(5.0, phase_end - float(angle_deg)) + 1e-9))
+        if horizons is None:
+            horizon_list = list(range(max_h, 0, -1))
+        else:
+            horizon_list = [int(h) for h in horizons if 1 <= int(h) <= max_h]
+
         trials = []
-        for h in range(max_h, 0, -1):
+        for h in horizon_list:
             target_t, target_R = self._v004_target(angle_deg, float(h))
             solved = 0
             attempted = 0
