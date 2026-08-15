@@ -1,11 +1,19 @@
 """v0.0.6 staged search with bounded primary multi-start.
 
-At a stalled state the planner now preserves exhaustive discrete leg choices but
-uses only the top-ranked touchdown initial guess in PRIMARY.  If v0.0.4 and
+At a stalled state the planner preserves exhaustive discrete leg choices but
+uses only the top-ranked touchdown initial guess in PRIMARY. If v0.0.4 and
 v0.0.5 PRIMARY fail, v0.0.6 static reconfiguration is tried before any extra
-multi-start.  Only after all static branches fail does DEEP FALLBACK use ranked
+multi-start. Only after all static branches fail does DEEP FALLBACK use ranked
 seeds 2..5, followed finally by shorter moving-body horizons.
+
+When ``checkpoint_path`` is set on the planner, every new BEST state is written
+atomically to JSON so an interrupted long run still retains its best trajectory
+prefix and terminal state.
 """
+
+import json
+import os
+from pathlib import Path
 
 import numpy as np
 
@@ -14,8 +22,56 @@ from .recovery_policy import RecoveryKind
 from .v004_receding import V004RecedingHorizonMixin
 
 
+def _checkpoint_jsonable(value):
+    if isinstance(value, np.ndarray):
+        return value.tolist()
+    if isinstance(value, np.generic):
+        return value.item()
+    if isinstance(value, dict):
+        return {str(k): _checkpoint_jsonable(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_checkpoint_jsonable(v) for v in value]
+    return value
+
+
 class V006StagedSearchMixin(V004RecedingHorizonMixin, DfsSearchMixin):
     """v0.0.4 normal progression -> PRIMARY -> static -> DEEP -> short horizon."""
+
+    def _write_best_checkpoint(self, angle, q, support, anchors, path, depth):
+        target = getattr(self, "checkpoint_path", None)
+        if not target:
+            return
+        target = Path(target)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        tmp = target.with_name(target.name + ".tmp")
+        payload = {
+            "checkpoint": True,
+            "success": False,
+            "best_angle_deg": float(angle),
+            "nodes": int(self.nodes),
+            "depth": int(depth),
+            "best_events": list(path),
+            "events": list(path),
+            "best_support": [int(x) for x in support],
+            "best_q": np.asarray(q, float),
+            "best_anchors": {
+                str(k): np.asarray(v, float) for k, v in anchors.items()
+            },
+            "search_stats": dict(getattr(self, "_search_stats", {})),
+            "fallback_free_so_far": bool(
+                getattr(self, "_search_stats", {}).get("deep_fallback_entries", 0) == 0
+                and getattr(self, "_search_stats", {}).get("short_horizon_entries", 0) == 0
+            ),
+            "candidate_type": "staged_v006_recovery",
+            "same_algorithm_all_angles": True,
+            "max_progress_deg": float(self.max_roll_deg),
+        }
+        with tmp.open("w", encoding="utf-8") as f:
+            json.dump(_checkpoint_jsonable(payload), f, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(str(tmp), str(target))
+        self._log("CHECKPOINT", str(target), "best", float(angle), "nodes", self.nodes)
 
     def _try_v004_at_horizon(
         self, angle, q_work, support, anchors, path, depth,
@@ -193,6 +249,9 @@ class V006StagedSearchMixin(V004RecedingHorizonMixin, DfsSearchMixin):
                     "BEST", self.best_angle, "depth", depth,
                     "support", support, "nodes", self.nodes,
                 )
+                self._write_best_checkpoint(
+                    angle, q_work, support, anchors, path, depth
+                )
 
             no = self._v004_no_contact(angle, q_work, support, anchors)
             if no is None or not no.get('accepted', False):
@@ -209,6 +268,9 @@ class V006StagedSearchMixin(V004RecedingHorizonMixin, DfsSearchMixin):
             if angle > self.best_angle:
                 self.best_angle = angle
                 self.best_path = path.copy()
+                self._write_best_checkpoint(
+                    angle, q_work, support, anchors, path, depth
+                )
             return {
                 "angle": angle,
                 "q": q_work,
