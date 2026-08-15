@@ -1,8 +1,10 @@
-"""Horizon-selectable wrapper for the recovered v0.0.5 multi-contact search.
+"""Horizon-selectable v0.0.5 multi-contact search.
 
-The underlying candidate generation, terminal hull/IK checks, NLP, dense Checker,
-and objective comparison are unchanged.  This wrapper only lets the v0.0.6
-staged policy choose which body-motion horizon is attempted at a given stage.
+The discrete touchdown/liftoff leg combinations remain exhaustive.  Each leg
+combination now uses caller-selected ranked touchdown initial guesses instead of
+the Cartesian product of all retained seeds.  Rank 1 is used by PRIMARY; aligned
+ranks 2..5 are available to DEEP FALLBACK.  The recovered terminal hull/IK
+prescreens, NLP formulation, dense Checker, and pattern order are preserved.
 """
 
 import itertools
@@ -19,12 +21,17 @@ from .multi_contact_v005 import (
     event_nodes,
     touchdown_seed_map,
 )
+from .v004_success_seed import _CandidateSolveTimeout, _candidate_wall_clock_timeout
 
 
 class V005StagedHorizonMixin(V005MultiRecoveryMixin):
-    """Recovered v0.0.5 search with caller-controlled horizon order."""
+    """Recovered v0.0.5 search with ranked-seed and horizon control."""
 
-    def _v005_multi_recovery(self, angle, q, support, anchors, seed=None, horizons=None):
+    def _v005_multi_recovery(
+        self, angle, q, support, anchors, seed=None, horizons=None,
+        touchdown_seed_ranks=(1,), candidate_timeout_s=60.0,
+        search_phase="primary",
+    ):
         seed = self.v005_multi_seed if seed is None else int(seed)
         st = self._v005_state(angle, q, support, anchors)
         cfg = self.v005_multi_settings
@@ -35,11 +42,15 @@ class V005StagedHorizonMixin(V005MultiRecoveryMixin):
             horizon_list = list(range(maxh, 0, -1))
         else:
             horizon_list = [int(h) for h in horizons if 1 <= int(h) <= maxh]
+        ranks = tuple(sorted({int(r) for r in touchdown_seed_ranks if int(r) >= 1}))
+        timeout_s = float(candidate_timeout_s)
 
         seed_counts = {int(leg): int(len(items)) for leg, items in cmap.items()}
         self._log(
-            "V005 start", "angle", float(angle), "support", tuple(support),
+            "V005 start", "phase", str(search_phase),
+            "angle", float(angle), "support", tuple(support),
             "horizons", tuple(horizon_list), "seed", int(seed),
+            "seed_ranks", ranks, "timeout_s", timeout_s,
             "touchdown_legs", int(len(cmap)), "seed_counts", seed_counts,
         )
 
@@ -49,23 +60,29 @@ class V005StagedHorizonMixin(V005MultiRecoveryMixin):
             for nadd, nrem in patterns:
                 if len(cmap) < nadd or len(support) < nrem:
                     self._log(
-                        "V005 skip pattern", "angle", float(angle), "horizon", int(h),
+                        "V005 skip pattern", "phase", str(search_phase),
+                        "angle", float(angle), "horizon", int(h),
                         "pattern", (int(nadd), int(nrem)), "reason", "insufficient_legs",
                     )
                     continue
+
                 tdnode, lonode = event_nodes(nadd, nrem)
                 generated = []
-                for legs in itertools.combinations(sorted(cmap), nadd):
-                    for picks in itertools.product(*[cmap[l] for l in legs]):
+                for rank in ranks:
+                    idx = rank - 1
+                    for legs in itertools.combinations(sorted(cmap), nadd):
+                        if any(len(cmap[l]) <= idx for l in legs):
+                            continue
+                        picks = tuple(cmap[l][idx] for l in legs)
                         xy = np.asarray([x[1] for x in picks])
                         for rem in itertools.combinations(sorted(support), nrem):
-                            generated.append(MultiContactCandidateV005(
+                            generated.append((rank, MultiContactCandidateV005(
                                 tuple(legs), xy.copy(), tdnode, tuple(rem), lonode
-                            ))
+                            )))
 
                 hull_valid = []
                 terminal_valid = []
-                for cand in generated:
+                for rank, cand in generated:
                     ns = tuple(sorted(
                         (set(support) | set(cand.touchdown_legs)) - set(cand.liftoff_legs)
                     ))
@@ -81,7 +98,7 @@ class V005StagedHorizonMixin(V005MultiRecoveryMixin):
                     )
                     if not inside:
                         continue
-                    hull_valid.append(cand)
+                    hull_valid.append((rank, cand))
                     if not all(
                         analytic_leg_ik_world(
                             self.kin, tt, tR, l, na[l],
@@ -91,22 +108,42 @@ class V005StagedHorizonMixin(V005MultiRecoveryMixin):
                     ):
                         continue
                     terminal_valid.append((
-                        _support_area([na[l][:2] for l in ns]), cand, ns, na
+                        _support_area([na[l][:2] for l in ns]), rank, cand, ns, na
                     ))
 
                 terminal_valid.sort(key=lambda x: x[0], reverse=True)
                 self._log(
-                    "V005 candidates", "angle", float(angle), "horizon", int(h),
+                    "V005 candidates", "phase", str(search_phase),
+                    "angle", float(angle), "horizon", int(h),
                     "pattern", (int(nadd), int(nrem)),
                     "generated", int(len(generated)),
                     "hull_ok", int(len(hull_valid)),
                     "terminal_ik_ok", int(len(terminal_valid)),
                 )
 
-                accepted = []
+                attempted = 0
                 solved_count = 0
-                for candidate_index, (_, cand, ns, _) in enumerate(terminal_valid):
-                    sol = MultiContactNLPV005(self.kin, st, cand, tt, tR, cfg).solve()
+                timed_out = 0
+                accepted = None
+                for candidate_index, (_, rank, cand, ns, _) in enumerate(terminal_valid):
+                    attempted += 1
+                    if hasattr(self, '_search_stats'):
+                        self._search_stats['v005_nlp_attempted'] += 1
+                    try:
+                        with _candidate_wall_clock_timeout(timeout_s):
+                            sol = MultiContactNLPV005(self.kin, st, cand, tt, tR, cfg).solve()
+                    except _CandidateSolveTimeout:
+                        timed_out += 1
+                        if hasattr(self, '_search_stats'):
+                            self._search_stats['v005_timeouts'] += 1
+                        self._log(
+                            "V005 candidate timeout", "phase", str(search_phase),
+                            "angle", float(angle), "horizon", int(h),
+                            "pattern", (int(nadd), int(nrem)),
+                            "candidate", int(candidate_index), "seed_rank", int(rank),
+                            "limit_s", timeout_s,
+                        )
+                        continue
                     if not sol["success"]:
                         continue
                     solved_count += 1
@@ -120,38 +157,46 @@ class V005StagedHorizonMixin(V005MultiRecoveryMixin):
                     }
                     for leg, xy in zip(cand.touchdown_legs, sol["touchdown_xy"]):
                         na[leg] = np.r_[xy, 0.0]
-                    accepted.append((
-                        sol["objective"], candidate_index, cand, sol, chk, ns, na
-                    ))
+                    accepted = (
+                        float(sol["objective"]), int(candidate_index), int(rank),
+                        cand, sol, chk, ns, na,
+                    )
+                    break
 
                 trial = {
+                    "search_phase": str(search_phase),
                     "horizon_deg": h,
                     "pattern": [nadd, nrem],
+                    "seed_ranks": [int(x) for x in ranks],
                     "generated": len(generated),
                     "terminal_hull_ok": len(hull_valid),
                     "terminal_ik_ok": len(terminal_valid),
+                    "attempted": attempted,
                     "solved": solved_count,
-                    "accepted": len(accepted),
+                    "timed_out": timed_out,
+                    "accepted": int(accepted is not None),
+                    "candidate_timeout_s": timeout_s,
                 }
                 trials.append(trial)
                 self._log(
-                    "V005 result", "angle", float(angle), "horizon", int(h),
+                    "V005 result", "phase", str(search_phase),
+                    "angle", float(angle), "horizon", int(h),
                     "pattern", (int(nadd), int(nrem)),
-                    "nlp_attempted", int(len(terminal_valid)),
+                    "nlp_attempted", int(attempted),
                     "nlp_solved", int(solved_count),
-                    "accepted", int(len(accepted)),
+                    "timed_out", int(timed_out),
+                    "accepted", int(accepted is not None),
                 )
 
-                if accepted:
-                    objective, candidate_index, cand, sol, chk, ns, na = min(
-                        accepted, key=lambda x: x[0]
-                    )
+                if accepted is not None:
+                    objective, candidate_index, rank, cand, sol, chk, ns, na = accepted
                     exec_node = max(cand.liftoff_nodes)
                     frac = exec_node / float(cfg.n_nodes - 1)
                     self._log(
-                        "V005 accepted", "angle", float(angle), "horizon", int(h),
+                        "V005 accepted", "phase", str(search_phase),
+                        "angle", float(angle), "horizon", int(h),
                         "pattern", (int(nadd), int(nrem)),
-                        "candidate", int(candidate_index),
+                        "candidate", int(candidate_index), "seed_rank", int(rank),
                         "add", tuple(int(x) for x in cand.touchdown_legs),
                         "remove", tuple(int(x) for x in cand.liftoff_legs),
                         "objective", float(objective),
@@ -159,6 +204,7 @@ class V005StagedHorizonMixin(V005MultiRecoveryMixin):
                     return {
                         "success": True,
                         "seed": seed,
+                        "seed_rank": int(rank),
                         "horizon_deg": float(h),
                         "exec_node": int(exec_node),
                         "exec_fraction": float(frac),
@@ -172,10 +218,13 @@ class V005StagedHorizonMixin(V005MultiRecoveryMixin):
                         "checker": chk,
                         "trials": trials,
                         "objective": float(objective),
+                        "search_phase": str(search_phase),
                     }
 
         self._log(
-            "V005 failed", "angle", float(angle), "support", tuple(support),
-            "horizons", tuple(horizon_list), "trials", int(len(trials)),
+            "V005 failed", "phase", str(search_phase),
+            "angle", float(angle), "support", tuple(support),
+            "horizons", tuple(horizon_list), "seed_ranks", ranks,
+            "trials", int(len(trials)),
         )
         return None
