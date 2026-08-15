@@ -28,7 +28,17 @@ jobs:
           from lily_contact_planner.tasks import Pitch45ThenRoll45Task
           from lily_contact_planner.unified_planner import UnifiedContactPlanner
 
-          kin = LilyKinematics()
+          # Historical v0.0.6 regression geometry.  These are model inputs,
+          # not planner-algorithm changes.
+          kin = LilyKinematics(
+              a=0.15,
+              L2=0.30,
+              L3=0.30,
+              delta_top=0.0,
+              delta_bottom=0.0,
+              eps_top=+1.0,
+              eps_bottom=-1.0,
+          )
           task = Pitch45ThenRoll45Task()
           planner = UnifiedContactPlanner(kin, task, max_roll_deg=90.0, verbose=True)
           q0 = np.tile(np.deg2rad([0.0, 20.0, -30.0]), (8, 1))
