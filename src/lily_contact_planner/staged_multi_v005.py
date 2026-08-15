@@ -36,11 +36,22 @@ class V005StagedHorizonMixin(V005MultiRecoveryMixin):
         else:
             horizon_list = [int(h) for h in horizons if 1 <= int(h) <= maxh]
 
+        seed_counts = {int(leg): int(len(items)) for leg, items in cmap.items()}
+        self._log(
+            "V005 start", "angle", float(angle), "support", tuple(support),
+            "horizons", tuple(horizon_list), "seed", int(seed),
+            "touchdown_legs", int(len(cmap)), "seed_counts", seed_counts,
+        )
+
         trials = []
         for h in horizon_list:
             tt, tR = self._pose(angle + h)
             for nadd, nrem in patterns:
                 if len(cmap) < nadd or len(support) < nrem:
+                    self._log(
+                        "V005 skip pattern", "angle", float(angle), "horizon", int(h),
+                        "pattern", (int(nadd), int(nrem)), "reason", "insufficient_legs",
+                    )
                     continue
                 tdnode, lonode = event_nodes(nadd, nrem)
                 generated = []
@@ -84,6 +95,14 @@ class V005StagedHorizonMixin(V005MultiRecoveryMixin):
                     ))
 
                 terminal_valid.sort(key=lambda x: x[0], reverse=True)
+                self._log(
+                    "V005 candidates", "angle", float(angle), "horizon", int(h),
+                    "pattern", (int(nadd), int(nrem)),
+                    "generated", int(len(generated)),
+                    "hull_ok", int(len(hull_valid)),
+                    "terminal_ik_ok", int(len(terminal_valid)),
+                )
+
                 accepted = []
                 solved_count = 0
                 for candidate_index, (_, cand, ns, _) in enumerate(terminal_valid):
@@ -105,7 +124,7 @@ class V005StagedHorizonMixin(V005MultiRecoveryMixin):
                         sol["objective"], candidate_index, cand, sol, chk, ns, na
                     ))
 
-                trials.append({
+                trial = {
                     "horizon_deg": h,
                     "pattern": [nadd, nrem],
                     "generated": len(generated),
@@ -113,13 +132,30 @@ class V005StagedHorizonMixin(V005MultiRecoveryMixin):
                     "terminal_ik_ok": len(terminal_valid),
                     "solved": solved_count,
                     "accepted": len(accepted),
-                })
+                }
+                trials.append(trial)
+                self._log(
+                    "V005 result", "angle", float(angle), "horizon", int(h),
+                    "pattern", (int(nadd), int(nrem)),
+                    "nlp_attempted", int(len(terminal_valid)),
+                    "nlp_solved", int(solved_count),
+                    "accepted", int(len(accepted)),
+                )
+
                 if accepted:
                     objective, candidate_index, cand, sol, chk, ns, na = min(
                         accepted, key=lambda x: x[0]
                     )
                     exec_node = max(cand.liftoff_nodes)
                     frac = exec_node / float(cfg.n_nodes - 1)
+                    self._log(
+                        "V005 accepted", "angle", float(angle), "horizon", int(h),
+                        "pattern", (int(nadd), int(nrem)),
+                        "candidate", int(candidate_index),
+                        "add", tuple(int(x) for x in cand.touchdown_legs),
+                        "remove", tuple(int(x) for x in cand.liftoff_legs),
+                        "objective", float(objective),
+                    )
                     return {
                         "success": True,
                         "seed": seed,
@@ -137,4 +173,9 @@ class V005StagedHorizonMixin(V005MultiRecoveryMixin):
                         "trials": trials,
                         "objective": float(objective),
                     }
+
+        self._log(
+            "V005 failed", "angle", float(angle), "support", tuple(support),
+            "horizons", tuple(horizon_list), "trials", int(len(trials)),
+        )
         return None
