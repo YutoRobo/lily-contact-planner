@@ -4,6 +4,25 @@
 
 現在の基準マイルストーンは、前進しながら 0°→720° 回転する課題に対して、**単一の接触探索アルゴリズム**を適用した結果です。planner には接触切替角度や歩容・接触系列を事前に与えません。初期関節状態と初期支持脚集合だけから開始し、現在の支持状態で進めるところまで進み、実行不能になったら touchdown 候補を生成し、局所的な接触 add/remove を探索し、先で行き止まりになれば backtracking します。
 
+## Pitch45 -> Roll45 のローカル/Actions共通実行
+
+Ubuntuで最新ブランチを取得したあと、リポジトリ直下から次を実行します。
+
+```bash
+git checkout agent/integrate-v006-chat-baseline
+git pull
+python3 -m pip install .
+python3 scripts/run_pitch45_roll45.py
+```
+
+結果は既定で `full_v006_fresh_result.json` に保存されます。保存先を変更する場合は、
+
+```bash
+python3 scripts/run_pitch45_roll45.py --output results/pitch45_roll45.json
+```
+
+とします。GitHub Actions の `Full v0.0.6 fresh check` も同じ `scripts/run_pitch45_roll45.py` を呼び出すため、ローカルUbuntuとActionsで実行入口・初期条件・planner呼び出しを共通化しています。
+
 ## 現在の基準タスク
 
 胴体幾何中心の高さを 0.35 m に固定し、基準タスクでは
@@ -274,74 +293,3 @@ R_{k+1} = Exp([omega_des^W]x Delta s) R_k
 - 525°–1005°: `+y` 並進しながら world `+x` 軸まわりに `-roll`
 
 再利用可能な `YawPitchRollWorldTask` を `src/lily_contact_planner/tasks.py` に追加しています。
-
-fresh search の部分解として、total progress 255° = yaw 45° + pitch 210° まで到達しています。
-
-- DFS nodes: 7
-- contact events: 6
-- 保存された 1° 刻み 256 状態で joint-limit violation: 0
-- 保存状態すべてで support-region condition: OK
-
-この world-frame 実験では、まだ roll 区間には到達していません。
-
-可視化では、接触切替を
-
-```text
-旧支持維持
--> 新脚 touchdown
--> 新旧両支持
--> support transfer
--> 旧脚 liftoff
-```
-
-の順で表示します。
-
-再利用可能な実装は `src/lily_contact_planner/visualization.py` にあり、仕様は [`docs/visualization.md`](docs/visualization.md)、順序のテストは `tests/test_visualization.py` にあります。
-
-ただし、この中間 transition frame は現時点では**表示用再構成**です。有限時間の接触遷移軌道として planner が明示的に最適化した結果ではありません。
-
-詳細は [`docs/progress_20260813.md`](docs/progress_20260813.md) と `results/yaw45_pitch480_world_partial_255_summary.json` を参照してください。
-
-## ディレクトリ構成
-
-- `src/lily_contact_planner/kinematics.py` — Lily の順運動学・Jacobian
-- `src/lily_contact_planner/checker.py` — 独立 Level-1 幾何 checker
-- `src/lily_contact_planner/tasks.py` — task path 定義
-- `src/lily_contact_planner/planner_base.py` — 連続運動学成立性レイヤ
-- `src/lily_contact_planner/planner_touchdown.py` — touchdown 生成・局所接触候補評価
-- `src/lily_contact_planner/planner_search.py` — DFS/backtracking 接触探索
-- `src/lily_contact_planner/visualization.py` — 表示補間と touchdown-before-liftoff の接触切替表示
-- `src/lily_contact_planner/unified_planner.py` — public planner class
-- `scripts/run_rollwalk_720.py` — 0°→720° 基準タスク再現スクリプト
-- `docs/formulation.md` — Level-1 数理定式化
-- `docs/algorithm_solver.md` — solver 構造とコード対応
-- `docs/validated_baseline.md` — baseline と検証範囲
-- `docs/progress_20260813.md` — 現在の実験変更点と world-frame task
-- `docs/visualization.md` — 表示専用補間の規約と制約
-- `tests/test_visualization.py` — touchdown/両支持が liftoff より先であることを確認
-- `results/` — baseline・実験結果
-
-## 実行方法
-
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -e .
-python scripts/run_rollwalk_720.py
-```
-
-720° の full search は意図的に計算量が大きい研究用 proof of concept であり、現時点では real-time planner ではありません。
-
-## 現在位置
-
-この repository では、**最初の角度非依存 contact-planning baseline**を保持しつつ、world-frame 多軸タスクの検討結果も記録しています。
-
-今後の主な課題は
-
-- dense continuous rollout / certification
-- touchdown-before-liftoff を表示だけでなく planner 本体の有限時間接触遷移として扱うこと
-- finite-thickness self-collision
-- 一般 joystick/task command
-- 各離散接触 branch 内での連続最適化の強化
-
-です。
