@@ -1,9 +1,10 @@
-"""v0.0.6 staged search with recovered v0.0.4/v0.0.5/v0.0.6 semantics.
+"""v0.0.6 staged search with bounded primary multi-start.
 
-At a stalled state, the planner now tries the full available short horizon first
-with increasing recovery capability: v0.0.4 one-to-one, v0.0.5 multi-contact,
-then v0.0.6 static PRM.  Only if all three stages fail does it shorten the body
-motion horizon as a final fallback for the moving-body v0.0.4/v0.0.5 searches.
+At a stalled state the planner now preserves exhaustive discrete leg choices but
+uses only the top-ranked touchdown initial guess in PRIMARY.  If v0.0.4 and
+v0.0.5 PRIMARY fail, v0.0.6 static reconfiguration is tried before any extra
+multi-start.  Only after all static branches fail does DEEP FALLBACK use ranked
+seeds 2..5, followed finally by shorter moving-body horizons.
 """
 
 import numpy as np
@@ -14,17 +15,22 @@ from .v004_receding import V004RecedingHorizonMixin
 
 
 class V006StagedSearchMixin(V004RecedingHorizonMixin, DfsSearchMixin):
-    """v0.0.4 normal progression -> staged recovery -> short-horizon fallback."""
+    """v0.0.4 normal progression -> PRIMARY -> static -> DEEP -> short horizon."""
 
     def _try_v004_at_horizon(
         self, angle, q_work, support, anchors, path, depth,
         horizon_deg, seed, advance_seed,
+        touchdown_seed_ranks=(1,), candidate_timeout_s=60.0,
+        search_phase="primary",
     ):
         one = self._v004_contact_recovery(
             angle, q_work, support, anchors,
             horizons=(int(horizon_deg),),
             seed_override=int(seed),
             advance_seed=bool(advance_seed),
+            touchdown_seed_ranks=touchdown_seed_ranks,
+            candidate_timeout_s=float(candidate_timeout_s),
+            search_phase=str(search_phase),
         )
         if one is None:
             return None
@@ -37,6 +43,7 @@ class V006StagedSearchMixin(V004RecedingHorizonMixin, DfsSearchMixin):
             "angle_deg": float(angle),
             "version": "v0.0.4-1to1",
             "recovery_kind": RecoveryKind.ONE_TO_ONE.value,
+            "search_phase": str(search_phase),
             "candidate_index": int(one['candidate_index']),
             "seed": int(one['seed']),
             "touchdown_leg": int(cand.touchdown_leg),
@@ -56,9 +63,10 @@ class V006StagedSearchMixin(V004RecedingHorizonMixin, DfsSearchMixin):
             "touchdown_before_liftoff": True,
         }
         self._log(
-            "V004 1to1", angle, "horizon", one['horizon_deg'],
-            "candidate", one['candidate_index'], "td", cand.touchdown_leg,
-            "lo", cand.liftoff_leg, "->", one['angle_after_deg'], new_support,
+            "V004 1to1", "phase", str(search_phase), angle,
+            "horizon", one['horizon_deg'], "candidate", one['candidate_index'],
+            "td", cand.touchdown_leg, "lo", cand.liftoff_leg,
+            "->", one['angle_after_deg'], new_support,
         )
         return self._dfs(
             one['angle_after_deg'], one['q_after'], new_support,
@@ -68,9 +76,15 @@ class V006StagedSearchMixin(V004RecedingHorizonMixin, DfsSearchMixin):
 
     def _try_v005_at_horizon(
         self, angle, q_work, support, anchors, path, depth, horizon_deg,
+        touchdown_seed_ranks=(1,), candidate_timeout_s=60.0,
+        search_phase="primary",
     ):
         multi = self._v005_multi_recovery(
-            angle, q_work, support, anchors, horizons=(int(horizon_deg),)
+            angle, q_work, support, anchors,
+            horizons=(int(horizon_deg),),
+            touchdown_seed_ranks=touchdown_seed_ranks,
+            candidate_timeout_s=float(candidate_timeout_s),
+            search_phase=str(search_phase),
         )
         if multi is None:
             return None
@@ -83,11 +97,13 @@ class V006StagedSearchMixin(V004RecedingHorizonMixin, DfsSearchMixin):
             "angle_deg": float(angle),
             "version": "v0.0.5-multi",
             "recovery_kind": RecoveryKind.MULTI_CONTACT.value,
+            "search_phase": str(search_phase),
             "body_progress_during_reconfiguration_deg": float(multi['angle_after_deg'] - angle),
             "contact_horizon_deg": float(multi['horizon_deg']),
             "exec_node": int(multi['exec_node']),
             "exec_fraction": float(multi['exec_fraction']),
             "seed": int(multi['seed']),
+            "seed_rank": int(multi.get('seed_rank', 1)),
             "candidate_index": int(multi['candidate_index']),
             "touchdown_legs": [int(x) for x in cand.touchdown_legs],
             "touchdown_nodes": [int(x) for x in cand.touchdown_nodes],
@@ -105,9 +121,10 @@ class V006StagedSearchMixin(V004RecedingHorizonMixin, DfsSearchMixin):
             "touchdown_before_liftoff": True,
         }
         self._log(
-            "V005 multi", angle, "horizon", multi['horizon_deg'],
-            "candidate", multi['candidate_index'], "add", cand.touchdown_legs,
-            "rem", cand.liftoff_legs, "->", multi['angle_after_deg'], new_support,
+            "V005 multi", "phase", str(search_phase), angle,
+            "horizon", multi['horizon_deg'], "candidate", multi['candidate_index'],
+            "add", cand.touchdown_legs, "rem", cand.liftoff_legs,
+            "->", multi['angle_after_deg'], new_support,
         )
         return self._dfs(
             multi['angle_after_deg'], multi['q_after'], new_support,
@@ -136,6 +153,7 @@ class V006StagedSearchMixin(V004RecedingHorizonMixin, DfsSearchMixin):
                 "angle_deg": float(angle),
                 "version": "v0.0.6-static-event",
                 "recovery_kind": RecoveryKind.STATIC_RECONFIGURATION.value,
+                "search_phase": "primary",
                 "body_progress_during_reconfiguration_deg": 0.0,
                 "add": [int(x) for x in sorted(add)],
                 "remove": [int(x) for x in rem],
@@ -167,8 +185,6 @@ class V006StagedSearchMixin(V004RecedingHorizonMixin, DfsSearchMixin):
         angle = float(angle_deg)
         q_work = q.copy()
 
-        # v0.0.4 baseline: at every cycle inspect the short horizon first.
-        # If it certifies, execute only ~1 deg and replan.
         while angle < self.max_roll_deg - 1e-9:
             if angle > self.best_angle:
                 self.best_angle = angle
@@ -213,23 +229,22 @@ class V006StagedSearchMixin(V004RecedingHorizonMixin, DfsSearchMixin):
         if primary_h < 1:
             return None
 
-        # Generate the v0.0.4 candidate set once for this stalled state.  Short
-        # horizon fallback reuses the same seed/candidate ordering.
         v004_seed = int(getattr(self, '_v004_contact_seed', 0))
 
-        # Primary pass: keep the useful 5-degree look-ahead (or the remaining
-        # phase length near a phase boundary), but widen recovery capability
-        # before spending time on shorter versions of the same one-to-one NLP.
         self._log("PRIMARY recovery horizon", primary_h, "at", angle)
         result = self._try_v004_at_horizon(
             angle, q_work, support, anchors, path, depth,
             primary_h, v004_seed, True,
+            touchdown_seed_ranks=(1,), candidate_timeout_s=60.0,
+            search_phase="primary",
         )
         if result is not None:
             return result
 
         result = self._try_v005_at_horizon(
             angle, q_work, support, anchors, path, depth, primary_h,
+            touchdown_seed_ranks=(1,), candidate_timeout_s=60.0,
+            search_phase="primary",
         )
         if result is not None:
             return result
@@ -240,21 +255,41 @@ class V006StagedSearchMixin(V004RecedingHorizonMixin, DfsSearchMixin):
         if result is not None:
             return result
 
-        # Final fallback only: if all recovery capabilities failed at the full
-        # short horizon, retry the moving-body v0.0.4/v0.0.5 stages with shorter
-        # horizons.  Static reconfiguration is horizon-independent, so repeating
-        # v0.0.6 at every shorter horizon would add no new search information.
+        self._search_stats['deep_fallback_entries'] += 1
+        self._log("DEEP FALLBACK", "at", angle, "horizon", primary_h)
+        result = self._try_v004_at_horizon(
+            angle, q_work, support, anchors, path, depth,
+            primary_h, v004_seed, False,
+            touchdown_seed_ranks=(2, 3, 4, 5), candidate_timeout_s=180.0,
+            search_phase="deep",
+        )
+        if result is not None:
+            return result
+
+        result = self._try_v005_at_horizon(
+            angle, q_work, support, anchors, path, depth, primary_h,
+            touchdown_seed_ranks=(2, 3, 4, 5), candidate_timeout_s=180.0,
+            search_phase="deep",
+        )
+        if result is not None:
+            return result
+
         for h in range(primary_h - 1, 0, -1):
+            self._search_stats['short_horizon_entries'] += 1
             self._log("SHORT-HORIZON fallback", h, "at", angle)
             result = self._try_v004_at_horizon(
                 angle, q_work, support, anchors, path, depth,
                 h, v004_seed, False,
+                touchdown_seed_ranks=(1,), candidate_timeout_s=60.0,
+                search_phase="short_horizon",
             )
             if result is not None:
                 return result
 
             result = self._try_v005_at_horizon(
                 angle, q_work, support, anchors, path, depth, h,
+                touchdown_seed_ranks=(1,), candidate_timeout_s=60.0,
+                search_phase="short_horizon",
             )
             if result is not None:
                 return result
@@ -263,4 +298,39 @@ class V006StagedSearchMixin(V004RecedingHorizonMixin, DfsSearchMixin):
 
     def plan(self, q0, support0):
         self._v004_contact_seed = 0
-        return super().plan(q0, support0)
+        self._search_stats = {
+            'v004_nlp_attempted': 0,
+            'v004_timeouts': 0,
+            'v005_nlp_attempted': 0,
+            'v005_timeouts': 0,
+            'deep_fallback_entries': 0,
+            'short_horizon_entries': 0,
+        }
+        result = super().plan(q0, support0)
+        events = result.get('events', []) if isinstance(result, dict) else []
+        self._search_stats.update({
+            'v004_primary_successes': sum(
+                1 for e in events
+                if e.get('version') == 'v0.0.4-1to1' and e.get('search_phase') == 'primary'
+            ),
+            'v005_primary_successes': sum(
+                1 for e in events
+                if e.get('version') == 'v0.0.5-multi' and e.get('search_phase') == 'primary'
+            ),
+            'v006_successes': sum(
+                1 for e in events if e.get('version') == 'v0.0.6-static-event'
+            ),
+            'deep_successes': sum(
+                1 for e in events if e.get('search_phase') == 'deep'
+            ),
+            'short_horizon_successes': sum(
+                1 for e in events if e.get('search_phase') == 'short_horizon'
+            ),
+        })
+        if isinstance(result, dict):
+            result['search_stats'] = dict(self._search_stats)
+            result['fallback_free'] = bool(
+                self._search_stats['deep_fallback_entries'] == 0
+                and self._search_stats['short_horizon_entries'] == 0
+            )
+        return result
