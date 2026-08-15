@@ -8,10 +8,16 @@ verified v0.0.6 run.
 Candidate handling follows the recovered v0.0.4 planner semantics/specification:
 Sobol touchdown seeds are ranked by support-polygon area and spatially
 separated in ``candidate_v004``; every resulting touchdown/liftoff candidate is
-then solved by the finite-horizon NLP and independently dense-checked.  The
-lost v0.0.5 ``solve_all_contact_candidates_local`` source is not reconstructed
-by inventing an extra prescreen here.
+then attempted by the finite-horizon NLP and independently dense-checked.  A
+wall-clock limit may mark a numerically stalled NLP candidate as failed; it does
+not change candidate generation, ordering, objective, or Checker semantics.
+The lost v0.0.5 ``solve_all_contact_candidates_local`` source is not
+reconstructed by inventing an extra prescreen here.
 """
+
+from contextlib import contextmanager
+import signal
+import threading
 
 import numpy as np
 
@@ -20,6 +26,42 @@ from .candidate_v004 import generate_contact_candidates_v004
 from .checker_v004 import dense_check_solution_v004
 from .trajectory_nlp_v004 import ContactSwitchNLPV004
 from .v004_receding import V004RecedingHorizonMixin
+
+
+class _CandidateSolveTimeout(RuntimeError):
+    pass
+
+
+def _raise_candidate_timeout(signum, frame):
+    raise _CandidateSolveTimeout("v0.0.4 contact candidate NLP timed out")
+
+
+@contextmanager
+def _candidate_wall_clock_timeout(seconds):
+    """Interrupt one SLSQP solve after ``seconds`` on POSIX main threads.
+
+    A non-positive value disables the timeout.  The planner is currently run on
+    Ubuntu both locally and in GitHub Actions, where SIGALRM/ITIMER_REAL are
+    available.  Failing loudly on unsupported execution contexts is preferable
+    to silently disabling a requested search limit.
+    """
+    seconds = float(seconds)
+    if seconds <= 0.0:
+        yield
+        return
+    if not hasattr(signal, "SIGALRM") or not hasattr(signal, "setitimer"):
+        raise RuntimeError("candidate wall-clock timeout requires POSIX SIGALRM/setitimer")
+    if threading.current_thread() is not threading.main_thread():
+        raise RuntimeError("candidate wall-clock timeout requires the main thread")
+
+    old_handler = signal.getsignal(signal.SIGALRM)
+    signal.signal(signal.SIGALRM, _raise_candidate_timeout)
+    signal.setitimer(signal.ITIMER_REAL, seconds)
+    try:
+        yield
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0.0)
+        signal.signal(signal.SIGALRM, old_handler)
 
 
 class _SuccessfulContactSwitchNLPV004(ContactSwitchNLPV004):
@@ -66,11 +108,26 @@ class V004SuccessfulSeedMixin(V004RecedingHorizonMixin):
             accepted = []
             solved = 0
             attempted = 0
+            timed_out = 0
+            timeout_candidate_indices = []
             for candidate_index, cand in enumerate(candidates):
                 attempted += 1
-                sol = _SuccessfulContactSwitchNLPV004(
-                    self.kin, st, cand, target_t, target_R, cfg
-                ).solve()
+                try:
+                    with _candidate_wall_clock_timeout(cfg.candidate_timeout_s):
+                        sol = _SuccessfulContactSwitchNLPV004(
+                            self.kin, st, cand, target_t, target_R, cfg
+                        ).solve()
+                except _CandidateSolveTimeout:
+                    timed_out += 1
+                    timeout_candidate_indices.append(int(candidate_index))
+                    self._log(
+                        'v0.0.4 candidate timeout',
+                        'angle', float(angle_deg),
+                        'horizon', float(h),
+                        'candidate', int(candidate_index),
+                        'limit_s', float(cfg.candidate_timeout_s),
+                    )
+                    continue
                 if not sol.success:
                     continue
                 solved += 1
@@ -86,6 +143,9 @@ class V004SuccessfulSeedMixin(V004RecedingHorizonMixin):
                 'attempted_candidates': int(attempted),
                 'solved_candidates': int(solved),
                 'accepted': int(len(accepted)),
+                'candidate_timeout_s': float(cfg.candidate_timeout_s),
+                'timed_out_candidates': int(timed_out),
+                'timeout_candidate_indices': timeout_candidate_indices,
             })
             if not accepted:
                 continue

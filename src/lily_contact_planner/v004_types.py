@@ -30,6 +30,7 @@ class V004Settings:
     maxiter: int = 300
     ftol: float = 1.0e-8
     initial_liftoff_clearance_m: float = 0.02
+    candidate_timeout_s: float = 60.0
 
     def __post_init__(self):
         if self.n_nodes < 3:
@@ -40,6 +41,8 @@ class V004Settings:
             raise ValueError("require 0 < touchdown_node < liftoff_node < n_nodes")
         if not (0.0 < self.execution_fraction <= 1.0):
             raise ValueError("execution_fraction must be in (0,1]")
+        if float(self.candidate_timeout_s) < 0.0:
+            raise ValueError("candidate_timeout_s must be >= 0")
 
     @property
     def root_ignore_m(self):
