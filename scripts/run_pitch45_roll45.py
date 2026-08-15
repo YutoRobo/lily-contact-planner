@@ -1,0 +1,84 @@
+#!/usr/bin/env python3
+"""Run the fresh Pitch45 -> Roll45 regression with UnifiedContactPlanner.
+
+This is the single entry point used by both local Ubuntu runs and GitHub Actions.
+"""
+
+import argparse
+import json
+from pathlib import Path
+
+import numpy as np
+
+from lily_contact_planner.kinematics import LilyKinematics
+from lily_contact_planner.tasks import Pitch45ThenRoll45Task
+from lily_contact_planner.unified_planner import UnifiedContactPlanner
+
+
+def _serializable_result(result):
+    serial = dict(result)
+    if serial.get("final_q") is not None:
+        serial["final_q"] = np.asarray(serial["final_q"]).tolist()
+    if serial.get("final_anchors") is not None:
+        serial["final_anchors"] = {
+            str(k): np.asarray(v).tolist()
+            for k, v in serial["final_anchors"].items()
+        }
+    return serial
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--output",
+        default="full_v006_fresh_result.json",
+        help="JSON output path",
+    )
+    parser.add_argument(
+        "--quiet",
+        action="store_true",
+        help="Disable planner progress logging",
+    )
+    args = parser.parse_args()
+
+    kin = LilyKinematics(
+        a=0.15,
+        L2=0.30,
+        L3=0.30,
+        delta_top=0.0,
+        delta_bottom=0.0,
+        eps_top=+1.0,
+        eps_bottom=-1.0,
+    )
+    task = Pitch45ThenRoll45Task()
+    planner = UnifiedContactPlanner(
+        kin,
+        task,
+        max_roll_deg=90.0,
+        verbose=not args.quiet,
+    )
+    q0 = np.tile(np.deg2rad([0.0, 20.0, -30.0]), (8, 1))
+    support0 = (2, 4, 6)
+
+    result = planner.plan(q0, support0)
+    serial = _serializable_result(result)
+
+    output = Path(args.output)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    with output.open("w") as f:
+        json.dump(serial, f, indent=2)
+
+    summary = {
+        "success": result["success"],
+        "best_angle_deg": result["best_angle_deg"],
+        "nodes": result["nodes"],
+        "n_events": len(result.get("events", [])),
+        "final_support": result.get("final_support"),
+        "event_versions": [e.get("version") for e in result.get("events", [])],
+        "output": str(output),
+    }
+    print("FINAL_RESULT", json.dumps(summary, indent=2), flush=True)
+
+
+if __name__ == "__main__":
+    main()
