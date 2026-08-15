@@ -5,14 +5,13 @@ with linear Cartesian XY and a 20 mm sinusoidal Z arc before touchdown.  This
 seed is what makes the later v0.0.4-labelled one-to-one events reproduce the
 verified v0.0.6 run.
 
-Candidate handling follows the recovered v0.0.4 planner semantics/specification:
+Candidate handling follows the recovered v0.0.4 candidate generation semantics:
 Sobol touchdown seeds are ranked by support-polygon area and spatially
-separated in ``candidate_v004``; every resulting touchdown/liftoff candidate is
-then attempted by the finite-horizon NLP and independently dense-checked.  A
-wall-clock limit may mark a numerically stalled NLP candidate as failed; it does
-not change candidate generation, ordering, objective, or Checker semantics.
-The lost v0.0.5 ``solve_all_contact_candidates_local`` source is not
-reconstructed by inventing an extra prescreen here.
+separated in ``candidate_v004``.  Candidates are attempted in that existing
+order.  Each finite-horizon NLP has a wall-clock limit; a numerically stalled
+candidate is treated as failed.  As soon as one candidate passes both the NLP
+and the independent dense Checker, the remaining candidates at that horizon
+are not solved.  No additional ranking score or prescreen is introduced.
 """
 
 from contextlib import contextmanager
@@ -38,13 +37,7 @@ def _raise_candidate_timeout(signum, frame):
 
 @contextmanager
 def _candidate_wall_clock_timeout(seconds):
-    """Interrupt one SLSQP solve after ``seconds`` on POSIX main threads.
-
-    A non-positive value disables the timeout.  The planner is currently run on
-    Ubuntu both locally and in GitHub Actions, where SIGALRM/ITIMER_REAL are
-    available.  Failing loudly on unsupported execution contexts is preferable
-    to silently disabling a requested search limit.
-    """
+    """Interrupt one SLSQP solve after ``seconds`` on POSIX main threads."""
     seconds = float(seconds)
     if seconds <= 0.0:
         yield
@@ -89,7 +82,7 @@ class _SuccessfulContactSwitchNLPV004(ContactSwitchNLPV004):
 
 
 class V004SuccessfulSeedMixin(V004RecedingHorizonMixin):
-    """Override only v0.0.4 contact-switch seed construction."""
+    """v0.0.4 contact recovery with timeout and first-feasible early stop."""
 
     def _v004_contact_recovery(self, angle_deg, q, support, anchors):
         cfg = self._v004_settings()
@@ -105,11 +98,12 @@ class V004SuccessfulSeedMixin(V004RecedingHorizonMixin):
         trials = []
         for h in range(max_h, 0, -1):
             target_t, target_R = self._v004_target(angle_deg, float(h))
-            accepted = []
             solved = 0
             attempted = 0
             timed_out = 0
             timeout_candidate_indices = []
+            chosen = None
+
             for candidate_index, cand in enumerate(candidates):
                 attempted += 1
                 try:
@@ -128,29 +122,45 @@ class V004SuccessfulSeedMixin(V004RecedingHorizonMixin):
                         'limit_s', float(cfg.candidate_timeout_s),
                     )
                     continue
+
                 if not sol.success:
                     continue
+
                 solved += 1
                 sol.checker = dense_check_solution_v004(
                     self.kin, st, sol, target_t, target_R, cfg
                 )
-                if sol.accepted:
-                    accepted.append((float(sol.objective), candidate_index, sol))
+                if not sol.accepted:
+                    continue
+
+                chosen = (float(sol.objective), int(candidate_index), sol)
+                self._log(
+                    'v0.0.4 first feasible candidate',
+                    'angle', float(angle_deg),
+                    'horizon', float(h),
+                    'candidate', int(candidate_index),
+                    'attempted', int(attempted),
+                    'objective', float(sol.objective),
+                )
+                break
 
             trials.append({
                 'horizon_deg': float(h),
                 'candidate_count': int(len(candidates)),
                 'attempted_candidates': int(attempted),
                 'solved_candidates': int(solved),
-                'accepted': int(len(accepted)),
+                'accepted': int(chosen is not None),
                 'candidate_timeout_s': float(cfg.candidate_timeout_s),
                 'timed_out_candidates': int(timed_out),
                 'timeout_candidate_indices': timeout_candidate_indices,
+                'early_stop': bool(chosen is not None and attempted < len(candidates)),
+                'remaining_candidates_skipped': int(len(candidates) - attempted) if chosen is not None else 0,
             })
-            if not accepted:
+
+            if chosen is None:
                 continue
 
-            objective, candidate_index, sol = min(accepted, key=lambda x: x[0])
+            objective, candidate_index, sol = chosen
             cand = sol.candidate
             exec_node = int(cfg.liftoff_node)
             exec_fraction = exec_node / float(cfg.n_nodes - 1)
