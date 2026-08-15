@@ -1,17 +1,9 @@
 """Successful v0.0.6 one-to-one seed refinement on top of v0.0.4.
 
-Archived trajectories show that future touchdown feet approach the ground point
-with linear Cartesian XY and a 20 mm sinusoidal Z arc before touchdown.  This
-seed is what makes the later v0.0.4-labelled one-to-one events reproduce the
-verified v0.0.6 run.
-
-Candidate handling follows the recovered v0.0.4 candidate generation semantics:
-Sobol touchdown seeds are ranked by support-polygon area and spatially
-separated in ``candidate_v004``.  Candidates are attempted in that existing
-order.  Each finite-horizon NLP has a wall-clock limit; a numerically stalled
-candidate is treated as failed.  As soon as one candidate passes both the NLP
-and the independent dense Checker, the remaining candidates at that horizon
-are not solved.  No additional ranking score or prescreen is introduced.
+Touchdown seeds retain the recovered Sobol generation and support-area ranking.
+The staged planner may now choose which ranked touchdown initial guesses are
+attempted and may override the per-candidate wall-clock limit.  Candidate order,
+NLP formulation, dense Checker, and first-feasible acceptance are unchanged.
 """
 
 from contextlib import contextmanager
@@ -32,7 +24,7 @@ class _CandidateSolveTimeout(RuntimeError):
 
 
 def _raise_candidate_timeout(signum, frame):
-    raise _CandidateSolveTimeout("v0.0.4 contact candidate NLP timed out")
+    raise _CandidateSolveTimeout("contact candidate NLP timed out")
 
 
 @contextmanager
@@ -82,7 +74,7 @@ class _SuccessfulContactSwitchNLPV004(ContactSwitchNLPV004):
 
 
 class V004SuccessfulSeedMixin(V004RecedingHorizonMixin):
-    """v0.0.4 contact recovery with timeout and first-feasible early stop."""
+    """v0.0.4 contact recovery with ranked seeds and first-feasible stop."""
 
     def _v004_contact_recovery(
         self,
@@ -93,23 +85,38 @@ class V004SuccessfulSeedMixin(V004RecedingHorizonMixin):
         horizons=None,
         seed_override=None,
         advance_seed=True,
+        touchdown_seed_ranks=None,
+        candidate_timeout_s=None,
+        search_phase="primary",
     ):
         cfg = self._v004_settings()
         st = self._v004_state(angle_deg, q, support, anchors)
         current_seed = int(getattr(self, '_v004_contact_seed', 0))
         seed = current_seed if seed_override is None else int(seed_override)
         candidates = list(generate_contact_candidates_v004(
-            self.kin, st, cfg, seed=seed
+            self.kin, st, cfg, seed=seed,
+            touchdown_seed_ranks=touchdown_seed_ranks,
         ))
         if advance_seed:
             self._v004_contact_seed = current_seed + 1
 
+        timeout_s = (
+            float(cfg.candidate_timeout_s)
+            if candidate_timeout_s is None else float(candidate_timeout_s)
+        )
         phase_end = self._v004_phase_end(angle_deg)
         max_h = int(np.floor(min(5.0, phase_end - float(angle_deg)) + 1e-9))
         if horizons is None:
             horizon_list = list(range(max_h, 0, -1))
         else:
             horizon_list = [int(h) for h in horizons if 1 <= int(h) <= max_h]
+
+        self._log(
+            'V004 contact start', 'phase', str(search_phase),
+            'angle', float(angle_deg), 'horizons', tuple(horizon_list),
+            'seed_ranks', None if touchdown_seed_ranks is None else tuple(touchdown_seed_ranks),
+            'candidates', int(len(candidates)), 'timeout_s', timeout_s,
+        )
 
         trials = []
         for h in horizon_list:
@@ -122,20 +129,25 @@ class V004SuccessfulSeedMixin(V004RecedingHorizonMixin):
 
             for candidate_index, cand in enumerate(candidates):
                 attempted += 1
+                if hasattr(self, '_search_stats'):
+                    self._search_stats['v004_nlp_attempted'] += 1
                 try:
-                    with _candidate_wall_clock_timeout(cfg.candidate_timeout_s):
+                    with _candidate_wall_clock_timeout(timeout_s):
                         sol = _SuccessfulContactSwitchNLPV004(
                             self.kin, st, cand, target_t, target_R, cfg
                         ).solve()
                 except _CandidateSolveTimeout:
                     timed_out += 1
+                    if hasattr(self, '_search_stats'):
+                        self._search_stats['v004_timeouts'] += 1
                     timeout_candidate_indices.append(int(candidate_index))
                     self._log(
                         'v0.0.4 candidate timeout',
+                        'phase', str(search_phase),
                         'angle', float(angle_deg),
                         'horizon', float(h),
                         'candidate', int(candidate_index),
-                        'limit_s', float(cfg.candidate_timeout_s),
+                        'limit_s', timeout_s,
                     )
                     continue
 
@@ -152,6 +164,7 @@ class V004SuccessfulSeedMixin(V004RecedingHorizonMixin):
                 chosen = (float(sol.objective), int(candidate_index), sol)
                 self._log(
                     'v0.0.4 first feasible candidate',
+                    'phase', str(search_phase),
                     'angle', float(angle_deg),
                     'horizon', float(h),
                     'candidate', int(candidate_index),
@@ -161,14 +174,19 @@ class V004SuccessfulSeedMixin(V004RecedingHorizonMixin):
                 break
 
             trials.append({
+                'search_phase': str(search_phase),
                 'horizon_deg': float(h),
                 'candidate_count': int(len(candidates)),
                 'attempted_candidates': int(attempted),
                 'solved_candidates': int(solved),
                 'accepted': int(chosen is not None),
-                'candidate_timeout_s': float(cfg.candidate_timeout_s),
+                'candidate_timeout_s': timeout_s,
                 'timed_out_candidates': int(timed_out),
                 'timeout_candidate_indices': timeout_candidate_indices,
+                'touchdown_seed_ranks': (
+                    None if touchdown_seed_ranks is None
+                    else [int(x) for x in touchdown_seed_ranks]
+                ),
                 'early_stop': bool(chosen is not None and attempted < len(candidates)),
                 'remaining_candidates_skipped': int(len(candidates) - attempted) if chosen is not None else 0,
             })
@@ -208,5 +226,6 @@ class V004SuccessfulSeedMixin(V004RecedingHorizonMixin):
                 'anchors_after': new_anchors,
                 'checker': sol.checker,
                 'trials': trials,
+                'search_phase': str(search_phase),
             }
         return None
