@@ -204,7 +204,7 @@ def _frame_geometry(kin, frame):
 
 
 def fixed_equal_axis_limits(frames, kin, half_window, axis_padding):
-    """Compute one fixed, equal-scale view that contains the complete GIF trajectory."""
+    """Compute one fixed equal-scale view with the ground fixed at z=0."""
     if not frames:
         raise ValueError("frames must not be empty")
 
@@ -216,21 +216,24 @@ def fixed_equal_axis_limits(frames, kin, half_window, axis_padding):
     mins = np.min(pts, axis=0)
     maxs = np.max(pts, axis=0)
 
-    # Keep a small amount of ground below z=0 visible for contact interpretation.
-    mins[2] = min(float(mins[2]), -0.05)
-    maxs[2] = max(float(maxs[2]), 0.0)
-
-    centers = 0.5 * (mins + maxs)
-    required_span = float(np.max(maxs - mins))
-    minimum_span = 2.0 * max(0.01, float(half_window))
     pad = max(0.0, float(axis_padding))
-    span = max(required_span + 2.0 * pad, minimum_span)
+    minimum_span = 2.0 * max(0.01, float(half_window))
+
+    # Use one common physical span for x/y/z.  The floor is the exact lower
+    # bound of the z-axis, so no artificial space is shown below z=0.
+    x_span = float(maxs[0] - mins[0]) + 2.0 * pad
+    y_span = float(maxs[1] - mins[1]) + 2.0 * pad
+    z_span = max(0.0, float(maxs[2])) + pad
+    span = max(minimum_span, x_span, y_span, z_span)
+
+    x_center = 0.5 * float(mins[0] + maxs[0])
+    y_center = 0.5 * float(mins[1] + maxs[1])
     half_span = 0.5 * span
 
     return (
-        (float(centers[0] - half_span), float(centers[0] + half_span)),
-        (float(centers[1] - half_span), float(centers[1] + half_span)),
-        (float(centers[2] - half_span), float(centers[2] + half_span)),
+        (x_center - half_span, x_center + half_span),
+        (y_center - half_span, y_center + half_span),
+        (0.0, span),
     )
 
 
@@ -258,7 +261,6 @@ def draw_frame(
     ) = _frame_geometry(kin, frame)
 
     if fixed_limits is None:
-        # Compatibility path for direct callers: make a single-frame equal-scale view.
         xlim, ylim, zlim = fixed_equal_axis_limits(
             [frame], kin, half_window, axis_padding
         )
