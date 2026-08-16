@@ -1,14 +1,10 @@
 #!/usr/bin/env python3
 """Run Yaw45 -> translating Pitch145 -> translating Roll-145.
 
-This harder validation keeps the current UnifiedContactPlanner search policy and
-initial leg state unchanged.  Only the task path changes:
-- in-place +yaw 45 deg about world +z;
-- world +x translation while applying +pitch 145 deg about world +y;
-- world +y translation while applying -roll 145 deg about world +x.
-
-Translation follows the earlier world-frame experiment at 1/300 m per degree.
-The total scalar planner progress is 335 deg.
+The current UnifiedContactPlanner search policy is unchanged.  This runner uses
+an initial posture that is rebuilt for the task's 0.35 m body height; the
+Pitch45 -> Roll45 regression runner and its archived initial condition are not
+modified.
 """
 
 import argparse
@@ -24,9 +20,19 @@ import numpy as np
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
+from lily_contact_planner.analytic_ik import analytic_leg_ik_world
 from lily_contact_planner.kinematics import LilyKinematics
-from lily_contact_planner.tasks import Yaw45Pitch145Roll145WorldTask
+from lily_contact_planner.nlp_geometry_v002 import geometry_inequalities
+from lily_contact_planner.tasks import (
+    Pitch45ThenRoll45Task,
+    Yaw45Pitch145Roll145WorldTask,
+)
 from lily_contact_planner.unified_planner import UnifiedContactPlanner
+from lily_contact_planner.v004_types import V004Settings
+
+
+REFERENCE_Q_DEG = np.array([0.0, 20.0, -30.0], dtype=float)
+INITIAL_SUPPORT = (2, 4, 6)
 
 
 def _serializable_result(result):
@@ -42,6 +48,81 @@ def _serializable_result(result):
     # mixin; do not duplicate them in the final summary JSON.
     serial.pop("best_trajectory", None)
     return serial
+
+
+def _build_height_consistent_initial_q(kin, task):
+    """Rebuild q0 for the 0.35 m task without touching the 45->45 baseline.
+
+    The old regression posture is used only to define the horizontal foot
+    layout.  At the new body height every leg is solved again with analytic IK
+    to the same foot XY and z=0.  This removes the previous 0.1746 m ground
+    penetration caused by reusing the regression joint angles at a lower body.
+    """
+    q_reference = np.tile(np.deg2rad(REFERENCE_Q_DEG), (kin.n_legs, 1))
+
+    reference_task = Pitch45ThenRoll45Task()
+    tref, Rref = reference_task.pose(0.0)
+    t0, R0 = task.pose(0.0)
+
+    q0 = np.empty_like(q_reference)
+    target_feet = []
+    for leg in range(kin.n_legs):
+        target = kin.foot_world(tref, Rref, leg, q_reference[leg]).copy()
+        target[2] = 0.0
+        target_feet.append(target.copy())
+
+        branches = analytic_leg_ik_world(
+            kin,
+            t0,
+            R0,
+            leg,
+            target,
+            q_reference=q_reference[leg],
+            residual_tol=2e-6,
+        )
+        safe = []
+        for q_leg in branches:
+            root, elbow, foot = kin.world_points(t0, R0, leg, q_leg)
+            min_z = float(min(root[2], elbow[2], foot[2]))
+            if min_z >= -1e-8:
+                safe.append((float(np.linalg.norm(q_leg - q_reference[leg])), q_leg))
+        if not safe:
+            raise RuntimeError(
+                "cannot construct a ground-safe 0.35 m initial IK posture "
+                "for leg {} at target {}".format(leg, target.tolist())
+            )
+        safe.sort(key=lambda item: item[0])
+        q0[leg] = safe[0][1]
+
+    # Reject an invalid initial state before entering SLSQP.  This is runner-side
+    # validation only; planner search semantics are unchanged.
+    cfg = V004Settings()
+    geom, _ = geometry_inequalities(
+        kin, t0, R0, q0, set(INITIAL_SUPPORT), cfg
+    )
+    geom_min = float(np.min(geom))
+    if geom_min < -1e-8:
+        raise RuntimeError(
+            "constructed 0.35 m initial posture is globally infeasible: "
+            "geometry_min={:.9g}".format(geom_min)
+        )
+
+    foot_z = []
+    elbow_z = []
+    for leg in range(kin.n_legs):
+        _, elbow, foot = kin.world_points(t0, R0, leg, q0[leg])
+        elbow_z.append(float(elbow[2]))
+        foot_z.append(float(foot[2]))
+
+    diagnostics = {
+        "q0_deg": np.rad2deg(q0).tolist(),
+        "target_feet_world_m": np.asarray(target_feet).tolist(),
+        "support0": list(INITIAL_SUPPORT),
+        "min_foot_z_m": float(min(foot_z)),
+        "min_elbow_z_m": float(min(elbow_z)),
+        "geometry_min": geom_min,
+    }
+    return q0, INITIAL_SUPPORT, diagnostics
 
 
 def main():
@@ -70,6 +151,11 @@ def main():
             "while planning. Set 0 to disable. This does not alter search semantics."
         ),
     )
+    parser.add_argument(
+        "--probe-init-only",
+        action="store_true",
+        help="Construct and validate q0, print diagnostics, then exit.",
+    )
     args = parser.parse_args()
 
     kin = LilyKinematics(
@@ -90,10 +176,7 @@ def main():
     )
     planner.checkpoint_path = str(Path(args.checkpoint))
 
-    # Keep the current Pitch45 -> Roll45 validation initial state unchanged so
-    # differences primarily reflect the harder task path.
-    q0 = np.tile(np.deg2rad([0.0, 20.0, -30.0]), (8, 1))
-    support0 = (2, 4, 6)
+    q0, support0, init_diag = _build_height_consistent_initial_q(kin, task)
 
     print(
         "TASK",
@@ -112,7 +195,12 @@ def main():
         ),
         flush=True,
     )
+    print("INITIAL_STATE", json.dumps(init_diag), flush=True)
     print("CHECKPOINT_PATH", planner.checkpoint_path, flush=True)
+
+    if args.probe_init_only:
+        print("INITIAL_STATE_PROBE_OK", flush=True)
+        return
 
     stack_interval = max(0.0, float(args.stack_dump_interval_s))
     faulthandler.enable()
