@@ -101,7 +101,18 @@ def main():
         default=1.0,
         help="Playback speed multiplier, e.g. 2.0 or 4.0; saved data is unchanged",
     )
-    parser.add_argument("--half-window", type=float, default=0.80)
+    parser.add_argument(
+        "--half-window",
+        type=float,
+        default=0.80,
+        help="Minimum horizontal half-window around the body; expands automatically.",
+    )
+    parser.add_argument(
+        "--axis-padding",
+        type=float,
+        default=0.08,
+        help="Extra margin [m] around robot geometry when auto-expanding axes.",
+    )
     parser.add_argument(
         "--same-support-midframes",
         type=int,
@@ -131,7 +142,14 @@ def main():
     args.output.parent.mkdir(parents=True, exist_ok=True)
     with writer.saving(fig, str(args.output), dpi=100):
         for i, frame in enumerate(playback_frames):
-            replay.draw_frame(ax, kin, frame, best_angle, float(args.half_window))
+            replay.draw_frame(
+                ax,
+                kin,
+                frame,
+                best_angle,
+                float(args.half_window),
+                float(args.axis_padding),
+            )
             writer.grab_frame()
             if i % 100 == 0:
                 print("render", i, "/", len(playback_frames), flush=True)
