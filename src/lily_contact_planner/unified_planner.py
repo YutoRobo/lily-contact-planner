@@ -13,9 +13,11 @@ from .static_prm_candidates import StaticPRMCandidateMixin
 from .staged_multi_v005 import V005StagedHorizonMixin
 from .v004_success_seed import V004SuccessfulSeedMixin
 from .checkpoint_trajectory import CheckpointTrajectoryMixin
+from .checkpoint_storage import SplitCheckpointStorageMixin
 
 
 class UnifiedContactPlanner(
+    SplitCheckpointStorageMixin,
     CheckpointTrajectoryMixin,
     StaticPRMCandidateMixin,
     PRMStaticRecoveryMixin,
