@@ -12,6 +12,7 @@ The total scalar planner progress is 335 deg.
 """
 
 import argparse
+import faulthandler
 import json
 from pathlib import Path
 import sys
@@ -60,6 +61,15 @@ def main():
         action="store_true",
         help="Disable planner progress logging",
     )
+    parser.add_argument(
+        "--stack-dump-interval-s",
+        type=float,
+        default=30.0,
+        help=(
+            "Diagnostic only: dump the current Python stack every N seconds "
+            "while planning. Set 0 to disable. This does not alter search semantics."
+        ),
+    )
     args = parser.parse_args()
 
     kin = LilyKinematics(
@@ -104,14 +114,24 @@ def main():
     )
     print("CHECKPOINT_PATH", planner.checkpoint_path, flush=True)
 
+    stack_interval = max(0.0, float(args.stack_dump_interval_s))
+    faulthandler.enable()
+    if stack_interval > 0.0:
+        print("STACK_DUMP_INTERVAL_S", stack_interval, flush=True)
+        faulthandler.dump_traceback_later(stack_interval, repeat=True)
+
     try:
-        result = planner.plan(q0, support0)
-    except KeyboardInterrupt:
-        print(
-            "INTERRUPTED checkpoint/trajectory retained at " + planner.checkpoint_path,
-            flush=True,
-        )
-        return
+        try:
+            result = planner.plan(q0, support0)
+        except KeyboardInterrupt:
+            print(
+                "INTERRUPTED checkpoint/trajectory retained at " + planner.checkpoint_path,
+                flush=True,
+            )
+            return
+    finally:
+        if stack_interval > 0.0:
+            faulthandler.cancel_dump_traceback_later()
 
     serial = _serializable_result(result)
     output = Path(args.output)
