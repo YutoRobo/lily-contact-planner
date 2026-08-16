@@ -27,8 +27,25 @@ class V004RecedingHorizonMixin:
         return V004Settings(maxiter=120, ftol=1e-8)
 
     def _v004_phase_end(self, angle_deg):
-        """Do not let one finite horizon cross the Pitch->Roll task corner."""
-        if angle_deg < 45.0 - 1e-9 and self.max_roll_deg > 45.0:
+        """Do not let one finite horizon cross a task-defined path corner.
+
+        New multi-axis tasks expose their scalar-progress phase boundaries via
+        ``task.phase_boundaries_deg``.  Pitch45ThenRoll45Task reports the same
+        45-deg corner as the historical hard-coded behavior, so the regression
+        task is unchanged.  Tasks without that property retain the old fallback.
+        """
+        angle = float(angle_deg)
+        boundaries = getattr(self.task, "phase_boundaries_deg", None)
+        if boundaries is not None:
+            for boundary in boundaries:
+                boundary = float(boundary)
+                if angle < boundary - 1e-9:
+                    return min(boundary, self.max_roll_deg)
+            return self.max_roll_deg
+
+        # Historical fallback for task classes that predate explicit phase
+        # boundaries.  This preserves their existing behavior.
+        if angle < 45.0 - 1e-9 and self.max_roll_deg > 45.0:
             return min(45.0, self.max_roll_deg)
         return self.max_roll_deg
 
