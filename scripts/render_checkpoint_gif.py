@@ -133,8 +133,6 @@ def build_display_frames(trajectory, same_support_midframes):
     keys = [keyframe(item) for item in trajectory]
     n_mid = max(0, int(same_support_midframes))
 
-    # Exact replay mode: no invented state is inserted between stored planner
-    # trajectory samples. This is the default for checkpoint inspection.
     if n_mid == 0:
         return keys
 
@@ -180,31 +178,10 @@ def build_display_frames(trajectory, same_support_midframes):
     return out
 
 
-def _adaptive_axis_limits(points, body_t, half_window, axis_padding):
-    """Keep the legacy view as a minimum, but expand to contain the full robot."""
-    pts = np.asarray(points, dtype=float).reshape(-1, 3)
-    t = np.asarray(body_t, dtype=float)
-    pad = max(0.0, float(axis_padding))
-    half = max(0.01, float(half_window))
-
-    xlo = min(float(t[0] - half), float(np.min(pts[:, 0]) - pad))
-    xhi = max(float(t[0] + half), float(np.max(pts[:, 0]) + pad))
-    ylo = min(float(t[1] - half), float(np.min(pts[:, 1]) - pad))
-    yhi = max(float(t[1] + half), float(np.max(pts[:, 1]) + pad))
-
-    # Preserve the old ground context while allowing large rotated limbs above
-    # or below the former fixed [-0.05, 0.90] z range.
-    zlo = min(-0.05, float(np.min(pts[:, 2]) - pad))
-    zhi = max(0.90, float(np.max(pts[:, 2]) + pad))
-    return (xlo, xhi), (ylo, yhi), (zlo, zhi)
-
-
-def draw_frame(ax, kin, frame, best_angle, half_window, axis_padding=0.08):
-    ax.cla()
+def _frame_geometry(kin, frame):
     t = frame.body_t
     R = frame.body_R
     q = frame.joint_q
-    support = frame.support_mask.astype(bool)
 
     unit_corners, edges = cube_edges()
     corners_w = t[None, :] + (R @ (kin.a * unit_corners).T).T
@@ -223,11 +200,71 @@ def draw_frame(ax, kin, frame, best_angle, half_window, axis_padding=0.08):
         + leg_points
         + [np.asarray(world_axis_ends), np.asarray(body_axis_ends)]
     )
-    xlim, ylim, zlim = _adaptive_axis_limits(
-        subject_points, t, half_window, axis_padding
+    return corners_w, edges, leg_points, world_axis_ends, body_axis_ends, subject_points
+
+
+def fixed_equal_axis_limits(frames, kin, half_window, axis_padding):
+    """Compute one fixed, equal-scale view that contains the complete GIF trajectory."""
+    if not frames:
+        raise ValueError("frames must not be empty")
+
+    point_clouds = []
+    for frame in frames:
+        point_clouds.append(_frame_geometry(kin, frame)[-1])
+
+    pts = np.vstack(point_clouds)
+    mins = np.min(pts, axis=0)
+    maxs = np.max(pts, axis=0)
+
+    # Keep a small amount of ground below z=0 visible for contact interpretation.
+    mins[2] = min(float(mins[2]), -0.05)
+    maxs[2] = max(float(maxs[2]), 0.0)
+
+    centers = 0.5 * (mins + maxs)
+    required_span = float(np.max(maxs - mins))
+    minimum_span = 2.0 * max(0.01, float(half_window))
+    pad = max(0.0, float(axis_padding))
+    span = max(required_span + 2.0 * pad, minimum_span)
+    half_span = 0.5 * span
+
+    return (
+        (float(centers[0] - half_span), float(centers[0] + half_span)),
+        (float(centers[1] - half_span), float(centers[1] + half_span)),
+        (float(centers[2] - half_span), float(centers[2] + half_span)),
     )
 
-    # Ground grid follows the actual visible horizontal window.
+
+def draw_frame(
+    ax,
+    kin,
+    frame,
+    best_angle,
+    half_window,
+    axis_padding=0.08,
+    fixed_limits=None,
+):
+    ax.cla()
+    t = frame.body_t
+    R = frame.body_R
+    support = frame.support_mask.astype(bool)
+
+    (
+        corners_w,
+        edges,
+        leg_points,
+        world_axis_ends,
+        body_axis_ends,
+        subject_points,
+    ) = _frame_geometry(kin, frame)
+
+    if fixed_limits is None:
+        # Compatibility path for direct callers: make a single-frame equal-scale view.
+        xlim, ylim, zlim = fixed_equal_axis_limits(
+            [frame], kin, half_window, axis_padding
+        )
+    else:
+        xlim, ylim, zlim = fixed_limits
+
     xgrid = np.linspace(xlim[0], xlim[1], 9)
     ygrid = np.linspace(ylim[0], ylim[1], 9)
     for yg in ygrid:
@@ -278,14 +315,7 @@ def draw_frame(ax, kin, frame, best_angle, half_window, axis_padding=0.08):
     ax.set_ylabel("world y [m]")
     ax.set_zlabel("world z [m]")
     ax.view_init(elev=22, azim=38)
-
-    # Match the visual box aspect to the actual data spans so the robot is not
-    # distorted when z has to expand for a rotated limb.
-    spans = np.array(
-        [xlim[1] - xlim[0], ylim[1] - ylim[0], zlim[1] - zlim[0]],
-        dtype=float,
-    )
-    ax.set_box_aspect(tuple(spans))
+    ax.set_box_aspect((1.0, 1.0, 1.0))
     ax.set_title(
         "Lily checkpoint replay  progress=%.2f / %.2f deg\n"
         "support=%s\n%s"
@@ -310,13 +340,13 @@ def main():
         "--half-window",
         type=float,
         default=0.80,
-        help="Minimum horizontal half-window around the body; expands automatically.",
+        help="Minimum equal-axis half-span for the fixed GIF view.",
     )
     parser.add_argument(
         "--axis-padding",
         type=float,
         default=0.08,
-        help="Extra margin [m] around robot geometry when auto-expanding axes.",
+        help="Extra margin [m] around the complete trajectory before fixing the view.",
     )
     parser.add_argument(
         "--same-support-midframes",
@@ -336,6 +366,10 @@ def main():
     frames = build_display_frames(trajectory, args.same_support_midframes)
 
     kin = build_kinematics()
+    fixed_limits = fixed_equal_axis_limits(
+        frames, kin, float(args.half_window), float(args.axis_padding)
+    )
+
     fig = plt.figure(figsize=(8.0, 7.0))
     ax = fig.add_subplot(111, projection="3d")
     writer = PillowWriter(fps=float(args.fps))
@@ -350,6 +384,7 @@ def main():
                 best_angle,
                 float(args.half_window),
                 float(args.axis_padding),
+                fixed_limits=fixed_limits,
             )
             writer.grab_frame()
             if i % 100 == 0:
@@ -358,6 +393,9 @@ def main():
     plt.close(fig)
     print("saved trajectory frames:", len(trajectory))
     print("display frames:", len(frames))
+    print("fixed xlim:", fixed_limits[0])
+    print("fixed ylim:", fixed_limits[1])
+    print("fixed zlim:", fixed_limits[2])
     print("best_angle_deg:", best_angle)
     print("gif:", args.output)
 
