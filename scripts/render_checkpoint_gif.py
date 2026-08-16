@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Render a checkpoint_v2 BEST trajectory directly to GIF.
 
-By default the GIF replays the saved planner trajectory exactly.  Optional
+By default the GIF replays the saved planner trajectory exactly. Optional
 visualization-only interpolation can be requested with
 ``--same-support-midframes > 0``; those inserted frames are not planner states.
 """
@@ -134,7 +134,7 @@ def build_display_frames(trajectory, same_support_midframes):
     n_mid = max(0, int(same_support_midframes))
 
     # Exact replay mode: no invented state is inserted between stored planner
-    # trajectory samples.  This is the default for checkpoint inspection.
+    # trajectory samples. This is the default for checkpoint inspection.
     if n_mid == 0:
         return keys
 
@@ -180,41 +180,81 @@ def build_display_frames(trajectory, same_support_midframes):
     return out
 
 
-def draw_frame(ax, kin, frame, best_angle, half_window):
+def _adaptive_axis_limits(points, body_t, half_window, axis_padding):
+    """Keep the legacy view as a minimum, but expand to contain the full robot."""
+    pts = np.asarray(points, dtype=float).reshape(-1, 3)
+    t = np.asarray(body_t, dtype=float)
+    pad = max(0.0, float(axis_padding))
+    half = max(0.01, float(half_window))
+
+    xlo = min(float(t[0] - half), float(np.min(pts[:, 0]) - pad))
+    xhi = max(float(t[0] + half), float(np.max(pts[:, 0]) + pad))
+    ylo = min(float(t[1] - half), float(np.min(pts[:, 1]) - pad))
+    yhi = max(float(t[1] + half), float(np.max(pts[:, 1]) + pad))
+
+    # Preserve the old ground context while allowing large rotated limbs above
+    # or below the former fixed [-0.05, 0.90] z range.
+    zlo = min(-0.05, float(np.min(pts[:, 2]) - pad))
+    zhi = max(0.90, float(np.max(pts[:, 2]) + pad))
+    return (xlo, xhi), (ylo, yhi), (zlo, zhi)
+
+
+def draw_frame(ax, kin, frame, best_angle, half_window, axis_padding=0.08):
     ax.cla()
     t = frame.body_t
     R = frame.body_R
     q = frame.joint_q
     support = frame.support_mask.astype(bool)
 
-    grid = np.linspace(-half_window, half_window, 9)
-    for g in grid:
+    unit_corners, edges = cube_edges()
+    corners_w = t[None, :] + (R @ (kin.a * unit_corners).T).T
+
+    leg_points = []
+    for leg in range(kin.n_legs):
+        root, elbow, foot = kin.world_points(t, R, leg, q[leg])
+        leg_points.append(np.vstack([root, elbow, foot]))
+
+    axis_len = 0.18
+    world_axis_ends = [t + axis_len * np.eye(3)[j] for j in range(3)]
+    body_axis_ends = [t + axis_len * R[:, j] for j in range(3)]
+
+    subject_points = np.vstack(
+        [corners_w]
+        + leg_points
+        + [np.asarray(world_axis_ends), np.asarray(body_axis_ends)]
+    )
+    xlim, ylim, zlim = _adaptive_axis_limits(
+        subject_points, t, half_window, axis_padding
+    )
+
+    # Ground grid follows the actual visible horizontal window.
+    xgrid = np.linspace(xlim[0], xlim[1], 9)
+    ygrid = np.linspace(ylim[0], ylim[1], 9)
+    for yg in ygrid:
         ax.plot(
-            [t[0] - half_window, t[0] + half_window],
-            [t[1] + g, t[1] + g],
+            [xlim[0], xlim[1]],
+            [yg, yg],
             [0.0, 0.0],
             linewidth=0.4,
             alpha=0.25,
         )
+    for xg in xgrid:
         ax.plot(
-            [t[0] + g, t[0] + g],
-            [t[1] - half_window, t[1] + half_window],
+            [xg, xg],
+            [ylim[0], ylim[1]],
             [0.0, 0.0],
             linewidth=0.4,
             alpha=0.25,
         )
 
-    unit_corners, edges = cube_edges()
-    corners_w = t[None, :] + (R @ (kin.a * unit_corners).T).T
     for i, j in edges:
         p0, p1 = corners_w[i], corners_w[j]
         ax.plot(
             [p0[0], p1[0]], [p0[1], p1[1]], [p0[2], p1[2]], linewidth=2.0
         )
 
-    for leg in range(kin.n_legs):
-        root, elbow, foot = kin.world_points(t, R, leg, q[leg])
-        pts = np.vstack([root, elbow, foot])
+    for leg, pts in enumerate(leg_points):
+        foot = pts[-1]
         ax.plot(pts[:, 0], pts[:, 1], pts[:, 2], linewidth=2.0)
         if support[leg]:
             ax.scatter([foot[0]], [foot[1]], [foot[2]], marker="x", s=45)
@@ -222,26 +262,30 @@ def draw_frame(ax, kin, frame, best_angle, half_window):
             ax.scatter([foot[0]], [foot[1]], [foot[2]], marker="o", s=12)
         ax.text(foot[0], foot[1], foot[2] + 0.02, str(leg))
 
-    axis_len = 0.18
-    for j, label in enumerate(("Xw", "Yw", "Zw")):
-        end = t + axis_len * np.eye(3)[j]
+    for end, label in zip(world_axis_ends, ("Xw", "Yw", "Zw")):
         ax.plot([t[0], end[0]], [t[1], end[1]], [t[2], end[2]], linewidth=2.0)
         ax.text(end[0], end[1], end[2], label)
-    for j, label in enumerate(("Xb", "Yb", "Zb")):
-        end = t + axis_len * R[:, j]
+    for end, label in zip(body_axis_ends, ("Xb", "Yb", "Zb")):
         ax.plot(
             [t[0], end[0]], [t[1], end[1]], [t[2], end[2]], linestyle="--"
         )
         ax.text(end[0], end[1], end[2], label)
 
-    ax.set_xlim(t[0] - half_window, t[0] + half_window)
-    ax.set_ylim(t[1] - half_window, t[1] + half_window)
-    ax.set_zlim(-0.05, max(0.90, t[2] + 0.45))
+    ax.set_xlim(*xlim)
+    ax.set_ylim(*ylim)
+    ax.set_zlim(*zlim)
     ax.set_xlabel("world x [m]")
     ax.set_ylabel("world y [m]")
     ax.set_zlabel("world z [m]")
     ax.view_init(elev=22, azim=38)
-    ax.set_box_aspect((1.0, 1.0, 0.85))
+
+    # Match the visual box aspect to the actual data spans so the robot is not
+    # distorted when z has to expand for a rotated limb.
+    spans = np.array(
+        [xlim[1] - xlim[0], ylim[1] - ylim[0], zlim[1] - zlim[0]],
+        dtype=float,
+    )
+    ax.set_box_aspect(tuple(spans))
     ax.set_title(
         "Lily checkpoint replay  progress=%.2f / %.2f deg\n"
         "support=%s\n%s"
@@ -262,7 +306,18 @@ def main():
         default=ROOT / "checkpoint.gif",
     )
     parser.add_argument("--fps", type=float, default=12.0)
-    parser.add_argument("--half-window", type=float, default=0.80)
+    parser.add_argument(
+        "--half-window",
+        type=float,
+        default=0.80,
+        help="Minimum horizontal half-window around the body; expands automatically.",
+    )
+    parser.add_argument(
+        "--axis-padding",
+        type=float,
+        default=0.08,
+        help="Extra margin [m] around robot geometry when auto-expanding axes.",
+    )
     parser.add_argument(
         "--same-support-midframes",
         type=int,
@@ -288,7 +343,14 @@ def main():
     args.output.parent.mkdir(parents=True, exist_ok=True)
     with writer.saving(fig, str(args.output), dpi=100):
         for i, frame in enumerate(frames):
-            draw_frame(ax, kin, frame, best_angle, float(args.half_window))
+            draw_frame(
+                ax,
+                kin,
+                frame,
+                best_angle,
+                float(args.half_window),
+                float(args.axis_padding),
+            )
             writer.grab_frame()
             if i % 100 == 0:
                 print("render", i, "/", len(frames), flush=True)
