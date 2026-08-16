@@ -14,8 +14,14 @@ The total scalar planner progress is 335 deg.
 import argparse
 import json
 from pathlib import Path
+import sys
 
 import numpy as np
+
+# Prefer the source tree that belongs to this checkout.  This avoids accidentally
+# importing an older lily_contact_planner previously installed in site-packages.
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "src"))
 
 from lily_contact_planner.kinematics import LilyKinematics
 from lily_contact_planner.tasks import Yaw45Pitch145Roll145WorldTask
