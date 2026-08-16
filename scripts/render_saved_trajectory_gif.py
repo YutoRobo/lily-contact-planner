@@ -26,7 +26,6 @@ def load_split_files(checkpoint_path, trajectory_override=None):
     checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
 
     if checkpoint.get("schema_version") == "checkpoint_v2":
-        # Backward compatibility with the short-lived embedded format.
         trajectory = checkpoint.get("best_trajectory")
         if not isinstance(trajectory, list) or not trajectory:
             raise RuntimeError("checkpoint_v2 has no embedded best_trajectory")
@@ -59,9 +58,6 @@ def speed_plan(frames, base_fps, speed):
     if base_fps <= 0.0:
         raise ValueError("--fps must be > 0")
 
-    # For speed-up, decimate first and then compensate residual ratio with FPS.
-    # This preserves approximately the requested overall duration while keeping
-    # GIF frame timing in a practical range.
     stride = max(1, int(math.floor(speed))) if speed >= 1.0 else 1
     sampled = list(frames[::stride])
     if sampled[-1] is not frames[-1]:
@@ -105,13 +101,13 @@ def main():
         "--half-window",
         type=float,
         default=0.80,
-        help="Minimum horizontal half-window around the body; expands automatically.",
+        help="Minimum equal-axis half-span for the fixed GIF view.",
     )
     parser.add_argument(
         "--axis-padding",
         type=float,
         default=0.08,
-        help="Extra margin [m] around robot geometry when auto-expanding axes.",
+        help="Extra margin [m] around the complete trajectory before fixing the view.",
     )
     parser.add_argument(
         "--same-support-midframes",
@@ -130,11 +126,19 @@ def main():
     display_frames = replay.build_display_frames(
         trajectory, args.same_support_midframes
     )
+
+    kin = replay.build_kinematics()
+    fixed_limits = replay.fixed_equal_axis_limits(
+        display_frames,
+        kin,
+        float(args.half_window),
+        float(args.axis_padding),
+    )
+
     playback_frames, effective_fps, stride = speed_plan(
         display_frames, args.fps, args.speed
     )
 
-    kin = replay.build_kinematics()
     fig = plt.figure(figsize=(8.0, 7.0))
     ax = fig.add_subplot(111, projection="3d")
     writer = PillowWriter(fps=effective_fps)
@@ -149,6 +153,7 @@ def main():
                 best_angle,
                 float(args.half_window),
                 float(args.axis_padding),
+                fixed_limits=fixed_limits,
             )
             writer.grab_frame()
             if i % 100 == 0:
@@ -162,6 +167,9 @@ def main():
     print("speed multiplier:", float(args.speed))
     print("frame stride:", stride)
     print("effective fps:", effective_fps)
+    print("fixed xlim:", fixed_limits[0])
+    print("fixed ylim:", fixed_limits[1])
+    print("fixed zlim:", fixed_limits[2])
     print("best_angle_deg:", best_angle)
     print("gif:", args.output)
 
