@@ -46,6 +46,11 @@ class Pitch45ThenRoll45Task:
     def total_progress_deg(self):
         return float(self.pitch_deg + self.roll_deg)
 
+    @property
+    def phase_boundaries_deg(self):
+        """Finite-horizon planning must not cross the pitch/roll corner."""
+        return (float(self.pitch_deg), float(self.total_progress_deg))
+
     def pose(self, s_deg: float):
         s = float(np.clip(s_deg, 0.0, self.total_progress_deg))
         t = np.array([0.0, 0.0, self.body_height_m], dtype=float)
@@ -61,16 +66,18 @@ class Pitch45ThenRoll45Task:
 
 @dataclass(frozen=True)
 class YawPitchRollWorldTask:
-    """World-frame task used by the 2026-08-13 multi-axis experiment.
+    """World-frame yaw -> translating pitch -> translating negative roll task.
 
     Progress ``s_deg`` is split into three phases:
 
-    1. 0..45 deg: in-place +yaw about world +z.
-    2. 45..525 deg: +x translation while applying +pitch about world +y.
-    3. 525..1005 deg: +y translation while applying -roll about world +x.
+    1. 0..yaw_deg: in-place +yaw about world +z.
+    2. yaw_deg..yaw_deg+pitch_deg: +x translation while applying +pitch
+       about world +y.
+    3. Remaining interval: +y translation while applying -roll about world +x.
 
     New world-frame rotations are left-multiplied. Thus the pitch and roll
     directions do not rotate with the robot body after the preceding phase.
+    The translation law is the one used by the earlier 2026-08-13 experiment.
     """
 
     body_height_m: float = 0.35
@@ -78,6 +85,17 @@ class YawPitchRollWorldTask:
     yaw_deg: float = 45.0
     pitch_deg: float = 480.0
     roll_deg: float = 480.0
+
+    @property
+    def total_progress_deg(self):
+        return float(self.yaw_deg + self.pitch_deg + self.roll_deg)
+
+    @property
+    def phase_boundaries_deg(self):
+        """Scalar-progress corners that a finite NLP horizon must not cross."""
+        yaw_end = float(self.yaw_deg)
+        pitch_end = float(self.yaw_deg + self.pitch_deg)
+        return (yaw_end, pitch_end, float(self.total_progress_deg))
 
     def pose(self, s_deg: float):
         s = float(s_deg)
@@ -114,3 +132,19 @@ class YawPitchRollWorldTask:
         ).as_matrix()
         Rx_roll = Rotation.from_euler("x", -r, degrees=True).as_matrix()
         return t, Rx_roll @ Ry_pitch @ Rz_yaw
+
+
+@dataclass(frozen=True)
+class Yaw45Pitch145Roll145WorldTask(YawPitchRollWorldTask):
+    """Harder validation task: Yaw45 -> translating Pitch145 -> translating Roll-145.
+
+    Pitch translates along world +x and roll translates along world +y at
+    1/300 m per degree, matching the earlier world-frame trajectory definition.
+    The total scalar planner progress is 335 deg.
+    """
+
+    body_height_m: float = 0.35
+    forward_m_per_deg: float = 1.0 / 300.0
+    yaw_deg: float = 45.0
+    pitch_deg: float = 145.0
+    roll_deg: float = 145.0
