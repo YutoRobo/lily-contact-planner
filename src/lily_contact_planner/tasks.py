@@ -148,3 +148,127 @@ class Yaw45Pitch145Roll145WorldTask(YawPitchRollWorldTask):
     yaw_deg: float = 45.0
     pitch_deg: float = 145.0
     roll_deg: float = 145.0
+
+
+@dataclass(frozen=True)
+class WorldMotionPhase:
+    """One segment of a world-frame piecewise motion task.
+
+    ``progress_deg`` is the scalar planner-progress length assigned to the
+    phase. During one degree of scalar progress, the body rotates
+    ``rotation_deg_per_progress`` degrees about the selected *world* axis and
+    translates by ``translation_world_m_per_progress`` metres in world XYZ.
+
+    Rotations are left-multiplied, matching ``YawPitchRollWorldTask``. Set the
+    rotation rate to zero for a translation-only phase.
+    """
+
+    progress_deg: float
+    rotation_axis: str = "z"
+    rotation_deg_per_progress: float = 0.0
+    translation_world_m_per_progress: tuple = (0.0, 0.0, 0.0)
+
+    def __post_init__(self):
+        if float(self.progress_deg) <= 0.0:
+            raise ValueError("WorldMotionPhase.progress_deg must be > 0")
+        if self.rotation_axis not in ("x", "y", "z"):
+            raise ValueError("WorldMotionPhase.rotation_axis must be x, y, or z")
+        if len(tuple(self.translation_world_m_per_progress)) != 3:
+            raise ValueError(
+                "WorldMotionPhase.translation_world_m_per_progress must have 3 values"
+            )
+
+
+@dataclass(frozen=True)
+class PiecewiseWorldTask:
+    """Generic task made by concatenating world-frame motion phases.
+
+    This class only defines the desired body pose as a function of scalar
+    progress. Contact timing, support selection, touchdown search and all
+    v0.0.4/v0.0.5/v0.0.6 recovery policy remain planner responsibilities.
+    """
+
+    phases: tuple
+    body_height_m: float = 0.35
+    initial_xy_m: tuple = (0.0, 0.0)
+
+    def __post_init__(self):
+        if not tuple(self.phases):
+            raise ValueError("PiecewiseWorldTask requires at least one phase")
+        if len(tuple(self.initial_xy_m)) != 2:
+            raise ValueError("PiecewiseWorldTask.initial_xy_m must have 2 values")
+        for phase in self.phases:
+            if not isinstance(phase, WorldMotionPhase):
+                raise TypeError("PiecewiseWorldTask phases must be WorldMotionPhase")
+
+    @property
+    def total_progress_deg(self):
+        return float(sum(float(p.progress_deg) for p in self.phases))
+
+    @property
+    def phase_boundaries_deg(self):
+        boundaries = []
+        total = 0.0
+        for phase in self.phases:
+            total += float(phase.progress_deg)
+            boundaries.append(total)
+        return tuple(boundaries)
+
+    def pose(self, s_deg: float):
+        s = float(np.clip(s_deg, 0.0, self.total_progress_deg))
+        t = np.array(
+            [float(self.initial_xy_m[0]), float(self.initial_xy_m[1]), self.body_height_m],
+            dtype=float,
+        )
+        R = np.eye(3, dtype=float)
+
+        remaining = s
+        for phase in self.phases:
+            local = min(max(remaining, 0.0), float(phase.progress_deg))
+            if local <= 0.0:
+                break
+
+            t = t + local * np.asarray(
+                phase.translation_world_m_per_progress, dtype=float
+            )
+            angle_deg = float(phase.rotation_deg_per_progress) * local
+            if abs(angle_deg) > 0.0:
+                R_inc = Rotation.from_euler(
+                    phase.rotation_axis, angle_deg, degrees=True
+                ).as_matrix()
+                R = R_inc @ R
+
+            remaining -= local
+            if remaining <= 1e-12:
+                break
+
+        return t, R
+
+
+@dataclass(frozen=True)
+class PitchForwardTask:
+    """Single world +Y pitch while translating along world +X.
+
+    Defaults to the requested 360 deg validation trajectory. The final
+    translation is 1.2 m when ``forward_m_per_deg=1/300``.
+    """
+
+    body_height_m: float = 0.35
+    forward_m_per_deg: float = 1.0 / 300.0
+    pitch_deg: float = 360.0
+
+    @property
+    def total_progress_deg(self):
+        return float(self.pitch_deg)
+
+    @property
+    def phase_boundaries_deg(self):
+        return (float(self.pitch_deg),)
+
+    def pose(self, s_deg: float):
+        s = float(np.clip(s_deg, 0.0, self.pitch_deg))
+        t = np.array(
+            [self.forward_m_per_deg * s, 0.0, self.body_height_m], dtype=float
+        )
+        R = Rotation.from_euler("y", s, degrees=True).as_matrix()
+        return t, R
