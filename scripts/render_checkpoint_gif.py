@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Render a checkpoint_v2 BEST trajectory directly to GIF.
 
-Planner keyframes come from the checkpoint. Extra frames inserted here are
-visualization-only interpolation and are not planner-certified states.
+By default the GIF replays the saved planner trajectory exactly.  Optional
+visualization-only interpolation can be requested with
+``--same-support-midframes > 0``; those inserted frames are not planner states.
 """
 
 import argparse
@@ -69,13 +70,18 @@ def load_checkpoint(path):
 
 def keyframe(item):
     support = tuple(int(x) for x in item["support"])
+    source = str(item.get("state_source", "unknown"))
+    certified = item.get("certified_state", None)
+    note = "saved trajectory: " + source
+    if certified is not None:
+        note += "  certified=%s" % bool(certified)
     return DisplayFrame(
         progress=float(item["progress_deg"]),
         body_t=np.asarray(item["body_t"], dtype=float),
         body_R=np.asarray(item["body_R"], dtype=float),
         joint_q=np.asarray(item["q_rad"], dtype=float),
         support_mask=support_mask(support),
-        note="planner keyframe: " + str(item.get("state_source", "unknown")),
+        note=note,
     )
 
 
@@ -125,9 +131,14 @@ def moving_support_switch_frames(prev, cur, n_mid=4):
 
 def build_display_frames(trajectory, same_support_midframes):
     keys = [keyframe(item) for item in trajectory]
-    out = [keys[0]]
     n_mid = max(0, int(same_support_midframes))
 
+    # Exact replay mode: no invented state is inserted between stored planner
+    # trajectory samples.  This is the default for checkpoint inspection.
+    if n_mid == 0:
+        return keys
+
+    out = [keys[0]]
     for prev, cur in zip(keys[:-1], keys[1:]):
         before = indices_from_mask(prev.support_mask)
         after = indices_from_mask(cur.support_mask)
@@ -150,20 +161,19 @@ def build_display_frames(trajectory, same_support_midframes):
             continue
 
         if before == after:
-            if n_mid > 0:
-                out.extend(interpolate_same_support(
-                    prev.progress,
-                    prev.body_t,
-                    prev.body_R,
-                    prev.joint_q,
-                    cur.progress,
-                    cur.body_t,
-                    cur.body_R,
-                    cur.joint_q,
-                    prev.support_mask,
-                    n_mid=n_mid,
-                ))
-        elif n_mid > 0:
+            out.extend(interpolate_same_support(
+                prev.progress,
+                prev.body_t,
+                prev.body_R,
+                prev.joint_q,
+                cur.progress,
+                cur.body_t,
+                cur.body_R,
+                cur.joint_q,
+                prev.support_mask,
+                n_mid=n_mid,
+            ))
+        else:
             out.extend(moving_support_switch_frames(prev, cur, n_mid=max(2, n_mid)))
         out.append(cur)
 
@@ -256,8 +266,11 @@ def main():
     parser.add_argument(
         "--same-support-midframes",
         type=int,
-        default=2,
-        help="Display-only frames inserted between planner keyframes",
+        default=0,
+        help=(
+            "Optional display-only interpolation between stored trajectory samples. "
+            "0 (default) replays checkpoint samples exactly."
+        ),
     )
     args = parser.parse_args()
 
@@ -281,7 +294,7 @@ def main():
                 print("render", i, "/", len(frames), flush=True)
 
     plt.close(fig)
-    print("planner keyframes:", len(trajectory))
+    print("saved trajectory frames:", len(trajectory))
     print("display frames:", len(frames))
     print("best_angle_deg:", best_angle)
     print("gif:", args.output)
