@@ -4,11 +4,19 @@
 This is the single entry point used by both local Ubuntu runs and GitHub Actions.
 The planner also writes an atomic BEST-state checkpoint whenever progress
 improves so an interrupted long run can still be inspected and replayed.
+
+Temporary CI diagnostic: when GITHUB_ACTIONS=true, run the Yaw45/Pitch145/Roll145
+startup instead, dump the Python stack every 30 seconds, and interrupt after
+180 seconds. This changes CI observation only; planner search semantics are not
+modified. The diagnostic block is intended to be reverted after inspection.
 """
 
 import argparse
+import faulthandler
 import json
+import os
 from pathlib import Path
+import signal
 import sys
 
 import numpy as np
@@ -19,7 +27,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from lily_contact_planner.kinematics import LilyKinematics
-from lily_contact_planner.tasks import Pitch45ThenRoll45Task
+from lily_contact_planner.tasks import Pitch45ThenRoll45Task, Yaw45Pitch145Roll145WorldTask
 from lily_contact_planner.unified_planner import UnifiedContactPlanner
 
 
@@ -35,6 +43,10 @@ def _serializable_result(result):
     # Dense trajectory data are persisted separately by checkpoint storage.
     serial.pop("best_trajectory", None)
     return serial
+
+
+def _diagnostic_alarm(signum, frame):
+    raise KeyboardInterrupt("CI yaw startup diagnostic time limit")
 
 
 def main():
@@ -65,11 +77,25 @@ def main():
         eps_top=+1.0,
         eps_bottom=-1.0,
     )
-    task = Pitch45ThenRoll45Task()
+
+    ci_yaw_diagnostic = os.environ.get("GITHUB_ACTIONS", "").lower() == "true"
+    if ci_yaw_diagnostic:
+        task = Yaw45Pitch145Roll145WorldTask()
+        max_progress = task.total_progress_deg
+        print("CI_YAW_STARTUP_DIAGNOSTIC", True, flush=True)
+        print("CI_DIAGNOSTIC_LIMIT_S", 180, flush=True)
+        faulthandler.enable()
+        faulthandler.dump_traceback_later(30.0, repeat=True)
+        signal.signal(signal.SIGALRM, _diagnostic_alarm)
+        signal.alarm(180)
+    else:
+        task = Pitch45ThenRoll45Task()
+        max_progress = 90.0
+
     planner = UnifiedContactPlanner(
         kin,
         task,
-        max_roll_deg=90.0,
+        max_roll_deg=max_progress,
         verbose=not args.quiet,
     )
     planner.checkpoint_path = str(Path(args.checkpoint))
@@ -77,6 +103,7 @@ def main():
     q0 = np.tile(np.deg2rad([0.0, 20.0, -30.0]), (8, 1))
     support0 = (2, 4, 6)
 
+    print("TASK", type(task).__name__, "MAX_PROGRESS", max_progress, flush=True)
     print("CHECKPOINT_PATH", planner.checkpoint_path, flush=True)
     try:
         result = planner.plan(q0, support0)
@@ -85,7 +112,13 @@ def main():
             "INTERRUPTED checkpoint retained at " + planner.checkpoint_path,
             flush=True,
         )
+        if ci_yaw_diagnostic:
+            print("CI_YAW_STARTUP_DIAGNOSTIC_COMPLETE", flush=True)
         return
+    finally:
+        if ci_yaw_diagnostic:
+            signal.alarm(0)
+            faulthandler.cancel_dump_traceback_later()
 
     serial = _serializable_result(result)
 
