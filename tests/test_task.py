@@ -3,7 +3,10 @@ from scipy.spatial.transform import Rotation
 
 from lily_contact_planner.tasks import (
     ForwardRollTask,
+    PiecewiseWorldTask,
     Pitch45ThenRoll45Task,
+    PitchForwardTask,
+    WorldMotionPhase,
     Yaw45Pitch145Roll145WorldTask,
 )
 
@@ -55,3 +58,49 @@ def test_yaw45_pitch145_roll145_world_translation_and_rotation():
         expected_roll @ expected_pitch @ expected_yaw,
         atol=1e-12,
     )
+
+
+def test_pitch_forward_360_end_pose():
+    task = PitchForwardTask()
+    t, R = task.pose(360.0)
+
+    assert task.total_progress_deg == 360.0
+    assert task.phase_boundaries_deg == (360.0,)
+    assert np.allclose(t, [1.2, 0.0, 0.35])
+    assert np.allclose(R, np.eye(3), atol=1e-12)
+
+
+def test_piecewise_world_task_left_multiplies_world_rotations():
+    task = PiecewiseWorldTask(
+        body_height_m=0.35,
+        phases=(
+            WorldMotionPhase(
+                progress_deg=45.0,
+                rotation_axis="z",
+                rotation_deg_per_progress=1.0,
+            ),
+            WorldMotionPhase(
+                progress_deg=30.0,
+                rotation_axis="y",
+                rotation_deg_per_progress=1.0,
+                translation_world_m_per_progress=(1.0 / 300.0, 0.0, 0.0),
+            ),
+            WorldMotionPhase(
+                progress_deg=20.0,
+                rotation_axis="x",
+                rotation_deg_per_progress=-1.0,
+                translation_world_m_per_progress=(0.0, 1.0 / 300.0, 0.0),
+            ),
+        ),
+    )
+
+    assert task.total_progress_deg == 95.0
+    assert task.phase_boundaries_deg == (45.0, 75.0, 95.0)
+
+    t, R = task.pose(95.0)
+    Rz = Rotation.from_euler("z", 45.0, degrees=True).as_matrix()
+    Ry = Rotation.from_euler("y", 30.0, degrees=True).as_matrix()
+    Rx = Rotation.from_euler("x", -20.0, degrees=True).as_matrix()
+
+    assert np.allclose(t, [30.0 / 300.0, 20.0 / 300.0, 0.35])
+    assert np.allclose(R, Rx @ Ry @ Rz, atol=1e-12)
