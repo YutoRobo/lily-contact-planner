@@ -9,8 +9,14 @@ improves so an interrupted long run can still be inspected and replayed.
 import argparse
 import json
 from pathlib import Path
+import sys
 
 import numpy as np
+
+# Prefer the source tree that belongs to this checkout.  This avoids accidentally
+# importing an older lily_contact_planner previously installed in site-packages.
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "src"))
 
 from lily_contact_planner.kinematics import LilyKinematics
 from lily_contact_planner.tasks import Pitch45ThenRoll45Task
@@ -26,6 +32,8 @@ def _serializable_result(result):
             str(k): np.asarray(v).tolist()
             for k, v in serial["final_anchors"].items()
         }
+    # Dense trajectory data are persisted separately by checkpoint storage.
+    serial.pop("best_trajectory", None)
     return serial
 
 
