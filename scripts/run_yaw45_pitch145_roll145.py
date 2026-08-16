@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 """Run Yaw45 -> translating Pitch145 -> translating Roll-145.
 
-The current UnifiedContactPlanner search policy is unchanged.  This runner uses
-an initial posture that is rebuilt for the task's 0.35 m body height; the
-Pitch45 -> Roll45 regression runner and its archived initial condition are not
-modified.
+The current UnifiedContactPlanner search policy is unchanged. This runner uses
+an initial posture rebuilt for the task's 0.35 m body height; the Pitch45 ->
+Roll45 regression runner and its archived initial condition are not modified.
 """
 
 import argparse
@@ -15,8 +14,6 @@ import sys
 
 import numpy as np
 
-# Prefer the source tree that belongs to this checkout.  This avoids accidentally
-# importing an older lily_contact_planner previously installed in site-packages.
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
@@ -44,32 +41,37 @@ def _serializable_result(result):
             str(k): np.asarray(v).tolist()
             for k, v in serial["final_anchors"].items()
         }
-    # Dense trajectory data are persisted separately by the checkpoint storage
-    # mixin; do not duplicate them in the final summary JSON.
     serial.pop("best_trajectory", None)
     return serial
 
 
 def _build_height_consistent_initial_q(kin, task):
-    """Rebuild q0 for the 0.35 m task without touching the 45->45 baseline.
+    """Build a valid q0 for the 0.35 m task only.
 
-    The old regression posture is used only to define the horizontal foot
-    layout.  At the new body height every leg is solved again with analytic IK
-    to the same foot XY and z=0.  This removes the previous 0.1746 m ground
-    penetration caused by reusing the regression joint angles at a lower body.
+    Lower-body legs (sigma_z < 0) are re-solved to the same ground-foot XY used
+    by the successful Pitch45->Roll45 regression. Upper-body legs are placed at
+    HOME [0,0,0], which points them outward/upward at the initial body pose.
+    The resulting complete state is checked with the v0.0.4 geometry constraints
+    before any SLSQP search is allowed to start.
     """
     q_reference = np.tile(np.deg2rad(REFERENCE_Q_DEG), (kin.n_legs, 1))
-
     reference_task = Pitch45ThenRoll45Task()
     tref, Rref = reference_task.pose(0.0)
     t0, R0 = task.pose(0.0)
 
-    q0 = np.empty_like(q_reference)
-    target_feet = []
+    q0 = np.zeros_like(q_reference)
+    target_feet = [None] * kin.n_legs
+
     for leg in range(kin.n_legs):
+        sigma_z = int(kin.sigmas[leg][2])
+        if sigma_z > 0:
+            q0[leg] = np.zeros(3, dtype=float)
+            target_feet[leg] = kin.foot_world(t0, R0, leg, q0[leg]).copy()
+            continue
+
         target = kin.foot_world(tref, Rref, leg, q_reference[leg]).copy()
         target[2] = 0.0
-        target_feet.append(target.copy())
+        target_feet[leg] = target.copy()
 
         branches = analytic_leg_ik_world(
             kin,
@@ -89,13 +91,11 @@ def _build_height_consistent_initial_q(kin, task):
         if not safe:
             raise RuntimeError(
                 "cannot construct a ground-safe 0.35 m initial IK posture "
-                "for leg {} at target {}".format(leg, target.tolist())
+                "for lower leg {} at target {}".format(leg, target.tolist())
             )
         safe.sort(key=lambda item: item[0])
         q0[leg] = safe[0][1]
 
-    # Reject an invalid initial state before entering SLSQP.  This is runner-side
-    # validation only; planner search semantics are unchanged.
     cfg = V004Settings()
     geom, _ = geometry_inequalities(
         kin, t0, R0, q0, set(INITIAL_SUPPORT), cfg
@@ -137,18 +137,14 @@ def main():
         default="yaw45_pitch145_roll145_checkpoint.json",
         help="Atomic BEST-state checkpoint JSON path",
     )
-    parser.add_argument(
-        "--quiet",
-        action="store_true",
-        help="Disable planner progress logging",
-    )
+    parser.add_argument("--quiet", action="store_true")
     parser.add_argument(
         "--stack-dump-interval-s",
         type=float,
         default=30.0,
         help=(
             "Diagnostic only: dump the current Python stack every N seconds "
-            "while planning. Set 0 to disable. This does not alter search semantics."
+            "while planning. Set 0 to disable."
         ),
     )
     parser.add_argument(
