@@ -1,10 +1,13 @@
 """Horizon-selectable v0.0.5 multi-contact search.
 
-The discrete touchdown/liftoff leg combinations remain exhaustive.  Each leg
-combination now uses caller-selected ranked touchdown initial guesses instead of
-the Cartesian product of all retained seeds.  Rank 1 is used by PRIMARY; aligned
-ranks 2..5 are available to DEEP FALLBACK.  The recovered terminal hull/IK
-prescreens, NLP formulation, dense Checker, and pattern order are preserved.
+The discrete touchdown/liftoff leg combinations remain exhaustive. Each leg
+combination uses caller-selected ranked touchdown initial guesses instead of the
+Cartesian product of all retained seeds. Rank 1 is used by PRIMARY; aligned
+ranks 2..5 are available to DEEP FALLBACK. Liftoff combinations are now tried
+in order of remaining support range: legs that can hold their current anchors
+for fewer future degrees are preferred, with support area as the secondary
+ranking. Terminal hull/IK prescreens, NLP formulation, dense Checker, and
+pattern order are preserved.
 """
 
 import itertools
@@ -44,6 +47,9 @@ class V005StagedHorizonMixin(V005MultiRecoveryMixin):
             horizon_list = [int(h) for h in horizons if 1 <= int(h) <= maxh]
         ranks = tuple(sorted({int(r) for r in touchdown_seed_ranks if int(r) >= 1}))
         timeout_s = float(candidate_timeout_s)
+        liftoff_remaining = self._liftoff_remaining_ranges(
+            angle, q, support, anchors
+        )
 
         seed_counts = {int(leg): int(len(items)) for leg, items in cmap.items()}
         self._log(
@@ -52,6 +58,9 @@ class V005StagedHorizonMixin(V005MultiRecoveryMixin):
             "horizons", tuple(horizon_list), "seed", int(seed),
             "seed_ranks", ranks, "timeout_s", timeout_s,
             "touchdown_legs", int(len(cmap)), "seed_counts", seed_counts,
+            "liftoff_remaining_deg", {
+                int(k): float(v) for k, v in sorted(liftoff_remaining.items())
+            },
         )
 
         trials = []
@@ -111,7 +120,12 @@ class V005StagedHorizonMixin(V005MultiRecoveryMixin):
                         _support_area([na[l][:2] for l in ns]), rank, cand, ns, na
                     ))
 
-                terminal_valid.sort(key=lambda x: x[0], reverse=True)
+                terminal_valid.sort(key=lambda x: (
+                    self._liftoff_priority_key(
+                        x[2].liftoff_legs, liftoff_remaining
+                    ),
+                    -float(x[0]),
+                ))
                 self._log(
                     "V005 candidates", "phase", str(search_phase),
                     "angle", float(angle), "horizon", int(h),
@@ -176,6 +190,9 @@ class V005StagedHorizonMixin(V005MultiRecoveryMixin):
                     "timed_out": timed_out,
                     "accepted": int(accepted is not None),
                     "candidate_timeout_s": timeout_s,
+                    "liftoff_remaining_deg": {
+                        int(k): float(v) for k, v in sorted(liftoff_remaining.items())
+                    },
                 }
                 trials.append(trial)
                 self._log(
