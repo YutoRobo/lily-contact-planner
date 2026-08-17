@@ -3,8 +3,8 @@
 At a stalled state the planner preserves exhaustive discrete leg choices but
 uses only the top-ranked touchdown initial guess in PRIMARY. If v0.0.4 and
 v0.0.5 PRIMARY fail, v0.0.6 static reconfiguration is tried before any extra
-multi-start. Only after all static branches fail does DEEP FALLBACK use ranked
-seeds 2..5, followed finally by shorter moving-body horizons.
+multi-start. Only after all static branches fail do shorter moving-body
+horizons run before DEEP FALLBACK uses ranked seeds 2..5.
 
 When ``checkpoint_path`` is set on the planner, every new BEST state is written
 atomically to JSON so an interrupted long run still retains its best trajectory
@@ -35,7 +35,7 @@ def _checkpoint_jsonable(value):
 
 
 class V006StagedSearchMixin(V004RecedingHorizonMixin, DfsSearchMixin):
-    """v0.0.4 normal progression -> PRIMARY -> static -> DEEP -> short horizon."""
+    """v0.0.4 normal progression -> PRIMARY -> static -> short horizon -> DEEP."""
 
     def _write_best_checkpoint(self, angle, q, support, anchors, path, depth):
         target = getattr(self, "checkpoint_path", None)
@@ -317,25 +317,6 @@ class V006StagedSearchMixin(V004RecedingHorizonMixin, DfsSearchMixin):
         if result is not None:
             return result
 
-        self._search_stats['deep_fallback_entries'] += 1
-        self._log("DEEP FALLBACK", "at", angle, "horizon", primary_h)
-        result = self._try_v004_at_horizon(
-            angle, q_work, support, anchors, path, depth,
-            primary_h, v004_seed, False,
-            touchdown_seed_ranks=(2, 3, 4, 5), candidate_timeout_s=180.0,
-            search_phase="deep",
-        )
-        if result is not None:
-            return result
-
-        result = self._try_v005_at_horizon(
-            angle, q_work, support, anchors, path, depth, primary_h,
-            touchdown_seed_ranks=(2, 3, 4, 5), candidate_timeout_s=180.0,
-            search_phase="deep",
-        )
-        if result is not None:
-            return result
-
         for h in range(primary_h - 1, 0, -1):
             self._search_stats['short_horizon_entries'] += 1
             self._log("SHORT-HORIZON fallback", h, "at", angle)
@@ -355,6 +336,25 @@ class V006StagedSearchMixin(V004RecedingHorizonMixin, DfsSearchMixin):
             )
             if result is not None:
                 return result
+
+        self._search_stats['deep_fallback_entries'] += 1
+        self._log("DEEP FALLBACK", "at", angle, "horizon", primary_h)
+        result = self._try_v004_at_horizon(
+            angle, q_work, support, anchors, path, depth,
+            primary_h, v004_seed, False,
+            touchdown_seed_ranks=(2, 3, 4, 5), candidate_timeout_s=180.0,
+            search_phase="deep",
+        )
+        if result is not None:
+            return result
+
+        result = self._try_v005_at_horizon(
+            angle, q_work, support, anchors, path, depth, primary_h,
+            touchdown_seed_ranks=(2, 3, 4, 5), candidate_timeout_s=180.0,
+            search_phase="deep",
+        )
+        if result is not None:
+            return result
 
         return None
 
