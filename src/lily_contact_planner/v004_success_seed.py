@@ -2,7 +2,9 @@
 
 Touchdown seeds retain the recovered Sobol generation and support-area ranking.
 The staged planner may now choose which ranked touchdown initial guesses are
-attempted and may override the per-candidate wall-clock limit.  Candidate order,
+attempted and may override the per-candidate wall-clock limit. Liftoff choices
+are ordered by how much farther each currently supporting leg can keep its
+present ground anchor; legs with less remaining support range are tried first.
 NLP formulation, dense Checker, and first-feasible acceptance are unchanged.
 """
 
@@ -76,6 +78,95 @@ class _SuccessfulContactSwitchNLPV004(ContactSwitchNLPV004):
 class V004SuccessfulSeedMixin(V004RecedingHorizonMixin):
     """v0.0.4 contact recovery with ranked seeds and first-feasible stop."""
 
+    def _liftoff_remaining_ranges(self, angle_deg, q, support, anchors):
+        """Estimate how many more degrees each support leg can hold its anchor.
+
+        This is intentionally a cheap kinematic priority metric, not a new hard
+        constraint. For each currently supporting leg we advance the task in
+        ``cfg.step_deg`` increments, keep that leg's world contact point fixed,
+        and require an analytic IK branch that remains above the ground. The
+        check stops at the current phase boundary or expanded look-ahead limit.
+
+        A small value means the leg is close to losing support feasibility and
+        should therefore be *tried earlier* as a liftoff leg. Existing support,
+        collision and trajectory checks still decide whether that liftoff is
+        actually allowed.
+        """
+        angle0 = float(angle_deg)
+        support = tuple(int(x) for x in support)
+        step = max(float(self.cfg.step_deg), 1e-6)
+        phase_end = float(self._v004_phase_end(angle0))
+        lookahead_end = min(
+            float(self.max_roll_deg),
+            phase_end,
+            angle0 + float(self.cfg.expanded_lookahead_deg),
+        )
+
+        cache_key = (
+            round(angle0, 9),
+            tuple(
+                (
+                    int(leg),
+                    tuple(np.round(np.asarray(q[int(leg)], float), 7)),
+                    tuple(np.round(np.asarray(anchors[int(leg)], float), 7)),
+                )
+                for leg in support
+            ),
+            round(lookahead_end, 9),
+        )
+        cache = getattr(self, "_liftoff_remaining_range_cache", None)
+        if cache is None:
+            cache = {}
+            self._liftoff_remaining_range_cache = cache
+        if cache_key in cache:
+            return dict(cache[cache_key])
+
+        remaining = {}
+        for leg in support:
+            q_ref = np.asarray(q[leg], float).copy()
+            anchor = np.asarray(anchors[leg], float)
+            a = angle0
+            last = 0.0
+            while a + step <= lookahead_end + 1e-9:
+                a_next = min(a + step, lookahead_end)
+                t_next, R_next = self._pose(a_next)
+                branches = analytic_leg_ik_world(
+                    self.kin,
+                    t_next,
+                    R_next,
+                    leg,
+                    anchor,
+                    q_reference=q_ref,
+                    residual_tol=2e-6,
+                )
+                q_next = None
+                for branch in branches:
+                    _, elbow, foot = self.kin.world_points(
+                        t_next, R_next, leg, branch
+                    )
+                    if min(float(elbow[2]), float(foot[2])) >= -1e-7:
+                        q_next = np.asarray(branch, float).copy()
+                        break
+                if q_next is None:
+                    break
+                q_ref = q_next
+                a = a_next
+                last = a - angle0
+            remaining[leg] = float(last)
+
+        if len(cache) >= 256:
+            cache.clear()
+        cache[cache_key] = dict(remaining)
+        return remaining
+
+    @staticmethod
+    def _liftoff_priority_key(liftoff_legs, remaining_ranges):
+        """Smaller remaining support range sorts first; existing order breaks ties."""
+        return tuple(sorted(
+            float(remaining_ranges.get(int(leg), float("inf")))
+            for leg in liftoff_legs
+        ))
+
     def _v004_contact_recovery(
         self,
         angle_deg,
@@ -100,6 +191,13 @@ class V004SuccessfulSeedMixin(V004RecedingHorizonMixin):
         if advance_seed:
             self._v004_contact_seed = current_seed + 1
 
+        liftoff_remaining = self._liftoff_remaining_ranges(
+            angle_deg, q, support, anchors
+        )
+        candidates.sort(key=lambda cand: float(
+            liftoff_remaining.get(int(cand.liftoff_leg), float("inf"))
+        ))
+
         timeout_s = (
             float(cfg.candidate_timeout_s)
             if candidate_timeout_s is None else float(candidate_timeout_s)
@@ -116,6 +214,9 @@ class V004SuccessfulSeedMixin(V004RecedingHorizonMixin):
             'angle', float(angle_deg), 'horizons', tuple(horizon_list),
             'seed_ranks', None if touchdown_seed_ranks is None else tuple(touchdown_seed_ranks),
             'candidates', int(len(candidates)), 'timeout_s', timeout_s,
+            'liftoff_remaining_deg', {
+                int(k): float(v) for k, v in sorted(liftoff_remaining.items())
+            },
         )
 
         trials = []
@@ -189,6 +290,9 @@ class V004SuccessfulSeedMixin(V004RecedingHorizonMixin):
                 ),
                 'early_stop': bool(chosen is not None and attempted < len(candidates)),
                 'remaining_candidates_skipped': int(len(candidates) - attempted) if chosen is not None else 0,
+                'liftoff_remaining_deg': {
+                    int(k): float(v) for k, v in sorted(liftoff_remaining.items())
+                },
             })
 
             if chosen is None:
