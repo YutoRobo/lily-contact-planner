@@ -2,8 +2,10 @@
 
 This restores the missing v0.0.6 search link: use the archived v0.0.4 ground
 contact candidate generator (seed=123), but judge touchdown reachability with
-the same finite-thickness PRM used to execute static recovery.  Ordinary
-one-to-one and v0.0.5 multi-contact search are untouched.
+the same finite-thickness PRM used to execute static recovery. Static plans are
+now ordered first by remaining support range of the liftoff leg, so a supporting
+leg that is close to losing its fixed-anchor IK is tried before a leg with large
+remaining range. Existing PRM feasibility and predicted-gain checks remain.
 """
 
 import numpy as np
@@ -27,6 +29,9 @@ class StaticPRMCandidateMixin:
         cfg = self._v004_settings()
         raw = generate_contact_candidates_v004(
             self.kin, st, cfg, seed=self._v006_static_candidate_seed
+        )
+        liftoff_remaining = self._liftoff_remaining_ranges(
+            angle_deg, q, support, anchors
         )
 
         plans = []
@@ -60,7 +65,8 @@ class StaticPRMCandidateMixin:
                     if not self._prm_static_leg_feasible(td, t, R, q_goal, q_test):
                         continue
                     path = self._prm_static_path(
-                        td, t, R, np.asarray(q[td], float), q_goal, np.asarray(q, float), seed=991
+                        td, t, R, np.asarray(q[td], float), q_goal,
+                        np.asarray(q, float), seed=991
                     )
                     if path is not None:
                         goal = q_goal.copy()
@@ -95,10 +101,20 @@ class StaticPRMCandidateMixin:
             score = gain - 0.12 * (len(add) + len(rem)) + 0.03 * len(new_support)
             plans.append((score, gain, add, rem, new_support, new_anchors, q_support))
 
-        # Preserve the existing ranking rule, but keep geometrically distinct
-        # touchdown points distinct; collapsing only by leg IDs can discard a
-        # PRM-reachable target before PRM is ever tried.
-        plans.sort(key=lambda x: (x[0], x[1]), reverse=True)
+        self._log(
+            "V006 liftoff remaining", float(angle_deg), {
+                int(k): float(v) for k, v in sorted(liftoff_remaining.items())
+            },
+        )
+
+        # Urgent liftoff legs come first. Existing score/gain rank plans that
+        # remove equally urgent legs. Geometrically distinct touchdown points
+        # remain distinct so a PRM-reachable target is not collapsed early.
+        plans.sort(key=lambda x: (
+            self._liftoff_priority_key(x[3], liftoff_remaining),
+            -float(x[0]),
+            -float(x[1]),
+        ))
         out = []
         seen = set()
         for plan in plans:
