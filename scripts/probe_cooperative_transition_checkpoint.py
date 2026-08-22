@@ -126,13 +126,17 @@ def _probe(planner, angle, q, support, anchors, settings, all_feasible):
                     )
             except _CandidateSolveTimeout:
                 totals["timeout"] += 1
+                payload = {
+                    **attempt,
+                    "reason": "timeout",
+                    "elapsed_s": time.monotonic() - start,
+                }
+                solver_diag = get_cooperative_nlp_diagnostics()
+                if solver_diag is not None:
+                    payload["solver"] = solver_diag
                 print(
                     "COOP_PROBE_REJECT",
-                    json.dumps({
-                        **attempt,
-                        "reason": "timeout",
-                        "elapsed_s": time.monotonic() - start,
-                    }),
+                    json.dumps(payload),
                     flush=True,
                 )
                 continue
