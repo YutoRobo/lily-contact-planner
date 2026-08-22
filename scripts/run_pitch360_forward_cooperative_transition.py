@@ -13,6 +13,9 @@ from lily_contact_planner.experimental_cooperative_transition import (
     CooperativeTransitionSettings,
     enable_cooperative_transition_experiment,
 )
+from lily_contact_planner.experimental_cooperative_transition_numerics import (
+    enable_consistent_cooperative_numerics,
+)
 
 
 if __name__ == "__main__":
@@ -28,7 +31,9 @@ if __name__ == "__main__":
         candidate_timeout_s=60.0,
         max_candidates_per_horizon=48,
     )
+    numerics_info = enable_consistent_cooperative_numerics()
     info = enable_cooperative_transition_experiment(settings)
+    print("COOPERATIVE_TRANSITION_NUMERICS", json.dumps(numerics_info), flush=True)
     print("COOPERATIVE_TRANSITION_EXPERIMENT", json.dumps(info), flush=True)
 
     from run_pitch360_forward import main
