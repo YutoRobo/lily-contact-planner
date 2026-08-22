@@ -1,0 +1,148 @@
+#!/usr/bin/env python3
+"""Probe cooperative contact transitions from a saved PitchForward checkpoint.
+
+This script does not continue DFS. It loads the checkpoint BEST state and
+solves neighboring (A, R) transition edges only.
+"""
+
+import argparse
+import json
+from pathlib import Path
+import sys
+
+import numpy as np
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "src"))
+
+from lily_contact_planner.experimental_cooperative_transition import (
+    CooperativeTransitionSettings,
+    solve_cooperative_transition_edges,
+)
+from lily_contact_planner.kinematics import LilyKinematics
+from lily_contact_planner.tasks import PitchForwardTask
+from lily_contact_planner.unified_planner import UnifiedContactPlanner
+
+
+def _load_best_state(data):
+    summary = data.get("best_summary", {})
+    angle = data.get("best_angle_deg", summary.get("best_angle_deg"))
+    support = data.get("best_support", summary.get("best_support"))
+    q = data.get("best_q", summary.get("best_q_rad"))
+    anchors = data.get("best_anchors", summary.get("best_anchors"))
+    if angle is None or support is None or q is None or anchors is None:
+        raise ValueError("checkpoint does not contain best angle/support/q/anchors")
+    return (
+        float(angle),
+        np.asarray(q, dtype=float),
+        tuple(int(x) for x in support),
+        {int(k): np.asarray(v, dtype=float) for k, v in anchors.items()},
+    )
+
+
+def _summary(result):
+    cand = result["candidate"]
+    checker = result["checker"]
+    return {
+        "horizon_deg": float(result["horizon_deg"]),
+        "exec_node": int(result["exec_node"]),
+        "exec_fraction": float(result["exec_fraction"]),
+        "angle_after_deg": float(result["angle_after_deg"]),
+        "add": [int(x) for x in cand.touchdown_legs],
+        "remove": [int(x) for x in cand.liftoff_legs],
+        "support_after": [int(x) for x in result["support_after"]],
+        "predicted_gain_deg": float(result["predicted_gain_deg"]),
+        "objective": float(result["objective"]),
+        "checker": {
+            k: (float(v) if isinstance(v, (int, float, np.number)) else v)
+            for k, v in checker.items()
+        },
+    }
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--checkpoint", default="pitch60_contactgraph_checkpoint.json")
+    parser.add_argument("--pitch-deg", type=float, default=60.0)
+    parser.add_argument("--forward-m-per-deg", type=float, default=1.0 / 300.0)
+    parser.add_argument("--body-height-m", type=float, default=0.35)
+    parser.add_argument("--max-support-count", type=int, default=5)
+    parser.add_argument("--max-add", type=int, default=1)
+    parser.add_argument("--max-release", type=int, default=2)
+    parser.add_argument("--max-total-changes", type=int, default=3)
+    parser.add_argument("--horizon-max-deg", type=int, default=5)
+    parser.add_argument("--settling-nodes", type=int, default=1)
+    parser.add_argument("--liftoff-clearance-m", type=float, default=0.02)
+    parser.add_argument("--candidate-timeout-s", type=float, default=60.0)
+    parser.add_argument("--max-candidates-per-horizon", type=int, default=24)
+    parser.add_argument("--all-feasible", action="store_true")
+    args = parser.parse_args()
+
+    with Path(args.checkpoint).open("r", encoding="utf-8") as f:
+        data = json.load(f)
+    angle, q, support, anchors = _load_best_state(data)
+
+    kin = LilyKinematics(
+        a=0.15,
+        L2=0.30,
+        L3=0.30,
+        delta_top=0.0,
+        delta_bottom=0.0,
+        eps_top=+1.0,
+        eps_bottom=-1.0,
+    )
+    task = PitchForwardTask(
+        body_height_m=float(args.body_height_m),
+        forward_m_per_deg=float(args.forward_m_per_deg),
+        pitch_deg=float(args.pitch_deg),
+    )
+    planner = UnifiedContactPlanner(
+        kin,
+        task,
+        max_roll_deg=task.total_progress_deg,
+        verbose=True,
+    )
+
+    settings = CooperativeTransitionSettings(
+        max_support_count=int(args.max_support_count),
+        max_add_per_transition=int(args.max_add),
+        max_release_per_transition=int(args.max_release),
+        max_total_contact_changes=int(args.max_total_changes),
+        horizon_max_deg=int(args.horizon_max_deg),
+        touchdown_seed_rank=1,
+        settling_nodes=int(args.settling_nodes),
+        liftoff_clearance_m=float(args.liftoff_clearance_m),
+        candidate_timeout_s=float(args.candidate_timeout_s),
+        max_candidates_per_horizon=int(args.max_candidates_per_horizon),
+    )
+
+    print(
+        "COOP_PROBE_STATE",
+        json.dumps({
+            "angle_deg": angle,
+            "support": list(support),
+            "settings": settings.__dict__,
+        }),
+        flush=True,
+    )
+    results = solve_cooperative_transition_edges(
+        planner,
+        angle,
+        q,
+        support,
+        anchors,
+        settings=settings,
+        stop_after_first=not args.all_feasible,
+    )
+    print(
+        "COOP_PROBE_RESULT",
+        json.dumps({
+            "feasible_count": len(results),
+            "edges": [_summary(x) for x in results],
+        }, indent=2),
+        flush=True,
+    )
+
+
+if __name__ == "__main__":
+    main()
