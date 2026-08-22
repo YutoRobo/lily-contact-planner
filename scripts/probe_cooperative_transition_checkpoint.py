@@ -22,6 +22,11 @@ from lily_contact_planner.experimental_cooperative_transition import (
     _enumerate_candidates,
     _solve_record,
 )
+from lily_contact_planner.experimental_cooperative_transition_numerics import (
+    enable_consistent_cooperative_numerics,
+    get_cooperative_nlp_diagnostics,
+    reset_cooperative_nlp_diagnostics,
+)
 from lily_contact_planner.kinematics import LilyKinematics
 from lily_contact_planner.tasks import PitchForwardTask
 from lily_contact_planner.unified_planner import UnifiedContactPlanner
@@ -109,6 +114,7 @@ def _probe(planner, angle, q, support, anchors, settings, all_feasible):
             print("COOP_PROBE_ATTEMPT", json.dumps(attempt), flush=True)
             totals["attempted"] += 1
             start = time.monotonic()
+            reset_cooperative_nlp_diagnostics()
 
             try:
                 with _candidate_wall_clock_timeout(
@@ -132,30 +138,37 @@ def _probe(planner, angle, q, support, anchors, settings, all_feasible):
                 continue
 
             elapsed = time.monotonic() - start
+            solver_diag = get_cooperative_nlp_diagnostics()
             if result is None:
                 reason = str(reject or "unknown")
                 totals[reason] = totals.get(reason, 0) + 1
+                payload = {
+                    **attempt,
+                    "reason": reason,
+                    "elapsed_s": elapsed,
+                }
+                if solver_diag is not None:
+                    payload["solver"] = solver_diag
                 print(
                     "COOP_PROBE_REJECT",
-                    json.dumps({
-                        **attempt,
-                        "reason": reason,
-                        "elapsed_s": elapsed,
-                    }),
+                    json.dumps(payload),
                     flush=True,
                 )
                 continue
 
             accepted.append(result)
+            payload = {
+                **attempt,
+                "elapsed_s": elapsed,
+                "angle_after_deg": float(result["angle_after_deg"]),
+                "predicted_gain_deg": float(result["predicted_gain_deg"]),
+                "objective": float(result["objective"]),
+            }
+            if solver_diag is not None:
+                payload["solver"] = solver_diag
             print(
                 "COOP_PROBE_ACCEPT",
-                json.dumps({
-                    **attempt,
-                    "elapsed_s": elapsed,
-                    "angle_after_deg": float(result["angle_after_deg"]),
-                    "predicted_gain_deg": float(result["predicted_gain_deg"]),
-                    "objective": float(result["objective"]),
-                }),
+                json.dumps(payload),
                 flush=True,
             )
             if not all_feasible:
@@ -181,6 +194,8 @@ def main():
     parser.add_argument("--max-candidates-per-horizon", type=int, default=48)
     parser.add_argument("--all-feasible", action="store_true")
     args = parser.parse_args()
+
+    numerics_info = enable_consistent_cooperative_numerics()
 
     with Path(args.checkpoint).open("r", encoding="utf-8") as f:
         data = json.load(f)
@@ -226,6 +241,7 @@ def main():
             "angle_deg": angle,
             "support": list(support),
             "settings": settings.__dict__,
+            "numerics": numerics_info,
         }),
         flush=True,
     )
