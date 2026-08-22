@@ -74,7 +74,7 @@ def main():
     parser.add_argument("--settling-nodes", type=int, default=1)
     parser.add_argument("--liftoff-clearance-m", type=float, default=0.02)
     parser.add_argument("--candidate-timeout-s", type=float, default=60.0)
-    parser.add_argument("--max-candidates-per-horizon", type=int, default=24)
+    parser.add_argument("--max-candidates-per-horizon", type=int, default=48)
     parser.add_argument("--all-feasible", action="store_true")
     args = parser.parse_args()
 
