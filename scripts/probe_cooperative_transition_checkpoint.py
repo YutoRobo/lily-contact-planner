@@ -2,13 +2,15 @@
 """Probe cooperative contact transitions from a saved PitchForward checkpoint.
 
 This script does not continue DFS. It loads the checkpoint BEST state and
-solves neighboring (A, R) transition edges only.
+solves neighboring (A, R) transition edges only. Progress is printed for every
+horizon and candidate so a long SLSQP solve is distinguishable from a hang.
 """
 
 import argparse
 import json
 from pathlib import Path
 import sys
+import time
 
 import numpy as np
 
@@ -17,11 +19,16 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from lily_contact_planner.experimental_cooperative_transition import (
     CooperativeTransitionSettings,
-    solve_cooperative_transition_edges,
+    _enumerate_candidates,
+    _solve_record,
 )
 from lily_contact_planner.kinematics import LilyKinematics
 from lily_contact_planner.tasks import PitchForwardTask
 from lily_contact_planner.unified_planner import UnifiedContactPlanner
+from lily_contact_planner.v004_success_seed import (
+    _CandidateSolveTimeout,
+    _candidate_wall_clock_timeout,
+)
 
 
 def _load_best_state(data):
@@ -58,6 +65,103 @@ def _summary(result):
             for k, v in checker.items()
         },
     }
+
+
+def _probe(planner, angle, q, support, anchors, settings, all_feasible):
+    phase_end = float(planner._v004_phase_end(angle))
+    maxh = int(np.floor(min(
+        float(settings.horizon_max_deg), phase_end - float(angle)
+    ) + 1e-9))
+    accepted = []
+    totals = {
+        "attempted": 0,
+        "timeout": 0,
+        "nlp": 0,
+        "checker": 0,
+        "predicted_gain": 0,
+    }
+    probe_start = time.monotonic()
+
+    for h in range(maxh, 0, -1):
+        records, counts = _enumerate_candidates(
+            planner, angle, q, support, anchors, h, settings
+        )
+        print(
+            "COOP_PROBE_HORIZON",
+            json.dumps({
+                "horizon_deg": h,
+                **counts,
+            }),
+            flush=True,
+        )
+
+        for candidate_index, record in enumerate(records):
+            cand = record["candidate"]
+            attempt = {
+                "horizon_deg": h,
+                "candidate": candidate_index + 1,
+                "of": len(records),
+                "add": [int(x) for x in cand.touchdown_legs],
+                "remove": [int(x) for x in cand.liftoff_legs],
+                "support_after": [int(x) for x in record["support_after"]],
+                "exec_angle_deg": float(record["exec_angle_deg"]),
+            }
+            print("COOP_PROBE_ATTEMPT", json.dumps(attempt), flush=True)
+            totals["attempted"] += 1
+            start = time.monotonic()
+
+            try:
+                with _candidate_wall_clock_timeout(
+                    float(settings.candidate_timeout_s)
+                ):
+                    result, reject = _solve_record(
+                        planner, angle, q, support, anchors,
+                        h, record, settings
+                    )
+            except _CandidateSolveTimeout:
+                totals["timeout"] += 1
+                print(
+                    "COOP_PROBE_REJECT",
+                    json.dumps({
+                        **attempt,
+                        "reason": "timeout",
+                        "elapsed_s": time.monotonic() - start,
+                    }),
+                    flush=True,
+                )
+                continue
+
+            elapsed = time.monotonic() - start
+            if result is None:
+                reason = str(reject or "unknown")
+                totals[reason] = totals.get(reason, 0) + 1
+                print(
+                    "COOP_PROBE_REJECT",
+                    json.dumps({
+                        **attempt,
+                        "reason": reason,
+                        "elapsed_s": elapsed,
+                    }),
+                    flush=True,
+                )
+                continue
+
+            accepted.append(result)
+            print(
+                "COOP_PROBE_ACCEPT",
+                json.dumps({
+                    **attempt,
+                    "elapsed_s": elapsed,
+                    "angle_after_deg": float(result["angle_after_deg"]),
+                    "predicted_gain_deg": float(result["predicted_gain_deg"]),
+                    "objective": float(result["objective"]),
+                }),
+                flush=True,
+            )
+            if not all_feasible:
+                return accepted, totals, time.monotonic() - probe_start
+
+    return accepted, totals, time.monotonic() - probe_start
 
 
 def main():
@@ -125,19 +229,22 @@ def main():
         }),
         flush=True,
     )
-    results = solve_cooperative_transition_edges(
+
+    results, totals, elapsed = _probe(
         planner,
         angle,
         q,
         support,
         anchors,
-        settings=settings,
-        stop_after_first=not args.all_feasible,
+        settings,
+        all_feasible=bool(args.all_feasible),
     )
     print(
         "COOP_PROBE_RESULT",
         json.dumps({
             "feasible_count": len(results),
+            "attempt_stats": totals,
+            "elapsed_s": elapsed,
             "edges": [_summary(x) for x in results],
         }, indent=2),
         flush=True,
