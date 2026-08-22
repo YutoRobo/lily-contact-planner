@@ -88,8 +88,25 @@ class NumericallyConsistentCooperativeTransitionNLP(_ORIGINAL_CLASS):
             ).as_rotvec()
         ))
 
+        initial_diag = {
+            "success": None,
+            "message": "solver_running_or_timed_out",
+            "eq_max": None,
+            "ineq_min": None,
+            "nit": None,
+            "nfev": None,
+            "objective": None,
+            "initial_eq_max": float(np.max(np.abs(eq0))) if eq0.size else 0.0,
+            "initial_ineq_min": float(np.min(ineq0)) if ineq0.size else float("inf"),
+            "initial_exec_body_pos_error_m": exec_pos_error,
+            "initial_exec_body_rot_error_rad": exec_rot_error,
+            "seed_policy": "liftoff_clearance_matches_hard_constraint",
+        }
+        _LAST_DIAGNOSTICS = initial_diag
+
         result = super().solve()
         _LAST_DIAGNOSTICS = {
+            **initial_diag,
             "success": bool(result.get("success", False)),
             "message": str(result.get("message", "")),
             "eq_max": float(result.get("eq_max", float("nan"))),
@@ -97,11 +114,6 @@ class NumericallyConsistentCooperativeTransitionNLP(_ORIGINAL_CLASS):
             "nit": int(result.get("nit", -1)),
             "nfev": int(result.get("nfev", -1)),
             "objective": float(result.get("objective", float("nan"))),
-            "initial_eq_max": float(np.max(np.abs(eq0))) if eq0.size else 0.0,
-            "initial_ineq_min": float(np.min(ineq0)) if ineq0.size else float("inf"),
-            "initial_exec_body_pos_error_m": exec_pos_error,
-            "initial_exec_body_rot_error_rad": exec_rot_error,
-            "seed_policy": "liftoff_clearance_matches_hard_constraint",
         }
         return result
 
