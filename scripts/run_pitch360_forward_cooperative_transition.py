@@ -26,7 +26,7 @@ if __name__ == "__main__":
         settling_nodes=1,
         liftoff_clearance_m=0.02,
         candidate_timeout_s=60.0,
-        max_candidates_per_horizon=24,
+        max_candidates_per_horizon=48,
     )
     info = enable_cooperative_transition_experiment(settings)
     print("COOPERATIVE_TRANSITION_EXPERIMENT", json.dumps(info), flush=True)
